@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { Search, ChevronRight, ArrowLeft, Video, CheckCircle } from 'lucide-react';
 import UserScreenLayout from './UserScreenLayout';
 import { useApp } from '../context/AppContext';
 import { useOffices } from '../../hooks/useOffices';
+import { useBuildingTourRealtime } from '../../services/vrTourService'; // <-- import
 
 export default function EServicesScreen() {
   const navigate = useNavigate();
@@ -11,6 +12,13 @@ export default function EServicesScreen() {
   const [activeTab, setActiveTab] = useState<'services' | 'tour'>('services');
   const [searchQuery, setSearchQuery] = useState('');
   const { offices, loading } = useOffices();
+
+  // VR tour data
+  const [vrTour, setVrTour] = useState<any>(null);
+  useEffect(() => {
+    const unsub = useBuildingTourRealtime((data) => setVrTour(data));
+    return () => unsub();
+  }, []);
 
   if (loading) {
     return (
@@ -20,6 +28,19 @@ export default function EServicesScreen() {
     );
   }
 
+  // Get the set of office IDs that have at least one VR hotspot
+  const officesWithVR = new Set<string>();
+  if (vrTour?.scenes) {
+    vrTour.scenes.forEach((scene: any) => {
+      scene.hotspots?.forEach((h: any) => {
+        if (h.type === 'office' && h.targetOfficeId) {
+          officesWithVR.add(h.targetOfficeId);
+        }
+      });
+    });
+  }
+
+  // Filter for search
   const filtered = offices.filter(o => {
     const q = searchQuery.toLowerCase();
     if (!q) return true;
@@ -31,8 +52,14 @@ export default function EServicesScreen() {
     );
   });
 
-  const tourOffices = offices.filter(o => o.vrTour);
+  // Offices that have VR (based on actual hotspots)
+  const tourOffices = offices.filter(o => officesWithVR.has(o.id!));
   const totalServices = offices.reduce((sum, o) => sum + o.services.length, 0);
+
+  // Navigate to VR tour for a specific office
+  const handleViewVRTour = (officeId: string) => {
+    navigate(`/map?tab=vr&officeId=${officeId}`);
+  };
 
   return (
     <UserScreenLayout>
@@ -109,7 +136,8 @@ export default function EServicesScreen() {
                       <span className="text-[11px] text-orange-500 font-medium bg-orange-50 px-2 py-0.5 rounded-full">
                         {office.services.length} {t('service(s)', 'serbisyo')}
                       </span>
-                      {office.vrTour && (
+                      {/* Show VR badge only if office has a VR hotspot */}
+                      {officesWithVR.has(office.id!) && (
                         <span className="text-[11px] text-purple-600 font-medium bg-purple-50 px-2 py-0.5 rounded-full flex items-center gap-1">
                           <Video size={10} />
                           {t('360° Tour', '360° Tour')}
@@ -144,7 +172,7 @@ export default function EServicesScreen() {
             {tourOffices.map(office => (
               <button
                 key={office.id}
-                onClick={() => navigate(`/office/${office.id}?tab=tour`)}
+                onClick={() => handleViewVRTour(office.id!)}
                 className="w-full bg-white rounded-2xl border border-gray-100 overflow-hidden hover:border-purple-200 hover:shadow-sm transition-all active:scale-[0.99]"
               >
                 <div className="h-32 flex items-center justify-center relative overflow-hidden" style={{ background: `linear-gradient(135deg, ${office.iconBg}22 0%, ${office.iconBg}44 50%, ${office.iconBg}22 100%)` }}>

@@ -1,7 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
-import { Upload, X, ArrowRight, Trash2, AlertTriangle } from 'lucide-react';
+// ============================================================
+// FILE: src/app/components/admin/VRMediaManager.tsx
+// ============================================================
+import React, { useState, useRef, useEffect } from 'react';
+import { Upload, X, ArrowRight, AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 import { VRTour, VRScene } from '../../../services/vrTourService';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 
 interface VRMediaManagerProps {
   tour: VRTour | null;
@@ -12,42 +16,41 @@ interface VRMediaManagerProps {
 const cloudName = (import.meta as any).env?.VITE_CLOUDINARY_CLOUD_NAME;
 const uploadPreset = (import.meta as any).env?.VITE_CLOUDINARY_UPLOAD_PRESET;
 
-const ConfirmDialog = ({ open, onConfirm, onCancel, message }: any) => {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-xl">
-        <div className="flex items-center gap-2 text-red-600 mb-3">
-          <AlertTriangle size={20} />
-          <h3 className="text-lg font-semibold">Confirm Delete</h3>
-        </div>
-        <p className="text-sm text-gray-600 mb-4">{message}</p>
-        <div className="flex gap-2 justify-end">
-          <button onClick={onCancel} className="px-4 py-2 border rounded-lg text-sm hover:bg-gray-50">
-            Cancel
-          </button>
-          <button onClick={onConfirm} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">
-            Delete
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
+interface UploadTask {
+  id: string;
+  file: File;
+  progress: number;
+  status: 'pending' | 'uploading' | 'done' | 'error';
+  url?: string;
+  error?: string;
+  sceneId?: string;
+}
 
 export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VRMediaManagerProps) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [scenes, setScenes] = useState<VRScene[]>(tour?.scenes || []);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteConfirmSingle, setDeleteConfirmSingle] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [labelEdits, setLabelEdits] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (tour) {
       setScenes(tour.scenes);
     }
   }, [tour]);
+
+  useEffect(() => {
+    const initialEdits: Record<string, string> = {};
+    scenes.forEach((s) => {
+      initialEdits[s.id] = s.label;
+    });
+    setLabelEdits(initialEdits);
+    setSelectedIds([]);
+  }, [scenes]);
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -58,110 +61,206 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
 
     setUploading(true);
     setError('');
-    setUploadProgress(0);
 
-    const newScenes: VRScene[] = [];
+    // Initialize upload tasks
+    const tasks: UploadTask[] = Array.from(files).map((file) => ({
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 6),
+      file,
+      progress: 0,
+      status: 'pending',
+    }));
+    setUploadTasks((prev) => [...prev, ...tasks]);
+
+    const total = tasks.length;
     let completed = 0;
-    const total = files.length;
 
-    const uploadSingle = async (file: File, index: number) => {
-      let processedFile = file;
-      if (file.size > 10 * 1024 * 1024) {
-        try {
-          processedFile = await imageCompression(file, {
-            maxSizeMB: 10,
-            maxWidthOrHeight: 4096,
-            useWebWorker: true,
-          });
-        } catch {
-          setError(`Compression failed for ${file.name}`);
-          completed++;
-          setUploadProgress(Math.round((completed / total) * 100));
-          return;
-        }
-      }
+    const uploadSingle = async (task: UploadTask) => {
+      try {
+        // Update status to uploading
+        setUploadTasks((prev) =>
+          prev.map((t) => (t.id === task.id ? { ...t, status: 'uploading' } : t))
+        );
 
-      const formData = new FormData();
-      formData.append('file', processedFile);
-      formData.append('upload_preset', uploadPreset);
-      formData.append('folder', 'findnau/vr-building-tour');
-
-      const xhr = new XMLHttpRequest();
-      await new Promise<void>((resolve, reject) => {
-        xhr.addEventListener('load', () => {
-          if (xhr.status === 200) {
-            const data = JSON.parse(xhr.responseText);
-            if (data.secure_url) {
-              newScenes.push({
-                id: Date.now().toString() + index,
-                url: data.secure_url,
-                label: file.name.replace(/\.[^/.]+$/, ''),
-                description: '',
-                hotspots: [],
-              });
-            } else {
-              setError(`Failed for ${file.name}: ${data.error?.message || 'Unknown error'}`);
-            }
-            resolve();
-          } else {
-            reject(new Error(`Upload failed with status ${xhr.status}`));
+        let processedFile = task.file;
+        if (task.file.size > 10 * 1024 * 1024) {
+          try {
+            processedFile = await imageCompression(task.file, {
+              maxSizeMB: 10,
+              maxWidthOrHeight: 4096,
+              useWebWorker: true,
+            });
+          } catch (err) {
+            throw new Error(`Compression failed: ${task.file.name}`);
           }
+        }
+
+        const formData = new FormData();
+        formData.append('file', processedFile);
+        formData.append('upload_preset', uploadPreset);
+        formData.append('folder', 'findnau/vr-building-tour');
+
+        const xhr = new XMLHttpRequest();
+        const uploadPromise = new Promise<{ secure_url: string }>((resolve, reject) => {
+          xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+              const progress = Math.round((e.loaded / e.total) * 100);
+              setUploadTasks((prev) =>
+                prev.map((t) => (t.id === task.id ? { ...t, progress } : t))
+              );
+            }
+          });
+          xhr.addEventListener('load', () => {
+            if (xhr.status === 200) {
+              const data = JSON.parse(xhr.responseText);
+              if (data.secure_url) {
+                resolve(data);
+              } else {
+                reject(new Error(data.error?.message || 'Unknown error'));
+              }
+            } else {
+              reject(new Error(`Upload failed with status ${xhr.status}`));
+            }
+          });
+          xhr.addEventListener('error', () => reject(new Error('Network error')));
+          xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`);
+          xhr.send(formData);
         });
-        xhr.addEventListener('error', () => reject(new Error('Network error')));
-        xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`);
-        xhr.send(formData);
-      }).finally(() => {
+
+        const result = await uploadPromise;
+
+        // Auto-save: create scene and update tour immediately
+        const newScene: VRScene = {
+          id: Date.now().toString() + task.id,
+          url: result.secure_url,
+          label: task.file.name.replace(/\.[^/.]+$/, ''),
+          description: '',
+          hotspots: [],
+        };
+
+        // Update local scenes state
+        const updatedScenes = [...scenes, newScene];
+        setScenes(updatedScenes);
+
+        // Persist to database via parent
+        const updatedTour: VRTour = {
+          ...tour,
+          id: tour?.id || 'buildingTour',
+          name: tour?.name || 'Building Tour',
+          description: tour?.description || '',
+          scenes: updatedScenes,
+        };
+        onTourUpdate(updatedTour);
+
+        // Mark task as done
+        setUploadTasks((prev) =>
+          prev.map((t) =>
+            t.id === task.id
+              ? { ...t, status: 'done', url: result.secure_url, sceneId: newScene.id, progress: 100 }
+              : t
+          )
+        );
+
         completed++;
-        setUploadProgress(Math.round((completed / total) * 100));
-      });
+      } catch (err: any) {
+        setUploadTasks((prev) =>
+          prev.map((t) =>
+            t.id === task.id
+              ? { ...t, status: 'error', error: err.message || 'Upload failed' }
+              : t
+          )
+        );
+        completed++;
+      }
     };
 
-    const uploads = Array.from(files).map((file, i) => uploadSingle(file, i));
-    await Promise.all(uploads);
+    // Upload all files in parallel with concurrency limit
+    const concurrency = 3;
+    const chunks = [];
+    for (let i = 0; i < tasks.length; i += concurrency) {
+      chunks.push(tasks.slice(i, i + concurrency));
+    }
+    for (const chunk of chunks) {
+      await Promise.all(chunk.map((task) => uploadSingle(task)));
+    }
 
-    if (newScenes.length > 0) {
-      const updatedScenes = [...scenes, ...newScenes];
-      setScenes(updatedScenes);
-      const updatedTour: VRTour = {
-        ...tour,
-        id: tour?.id || 'buildingTour',
-        name: tour?.name || 'Building Tour',
-        description: tour?.description || '',
-        scenes: updatedScenes,
-      };
-      onTourUpdate(updatedTour);
+    // Check if any tasks failed
+    const hasErrors = uploadTasks.some((t) => t.status === 'error');
+    if (hasErrors) {
+      setError('Some images failed to upload. Check the list below for details.');
     }
 
     setUploading(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleRename = (id: string, newName: string) => {
-    const updated = scenes.map((s) => (s.id === id ? { ...s, label: newName } : s));
-    setScenes(updated);
-    onTourUpdate({ ...tour!, id: tour?.id || 'buildingTour', scenes: updated });
+  const handleRenameCommit = (sceneId: string) => {
+    const newLabel = labelEdits[sceneId]?.trim();
+    if (!newLabel) return;
+    const scene = scenes.find((s) => s.id === sceneId);
+    if (scene && scene.label !== newLabel) {
+      const updated = scenes.map((s) => (s.id === sceneId ? { ...s, label: newLabel } : s));
+      setScenes(updated);
+      onTourUpdate({
+        ...tour!,
+        id: tour?.id || 'buildingTour',
+        scenes: updated,
+      });
+    }
   };
 
-  const confirmDeleteScene = () => {
-    if (!deleteConfirm) return;
-    const updated = scenes.filter((s) => s.id !== deleteConfirm);
+  const handleDeleteSingle = (sceneId: string) => {
+    setDeleteConfirmSingle(sceneId);
+  };
+
+  const confirmDeleteSingle = () => {
+    if (!deleteConfirmSingle) return;
+    const updated = scenes.filter((s) => s.id !== deleteConfirmSingle);
     setScenes(updated);
-    onTourUpdate({ ...tour!, id: tour?.id || 'buildingTour', scenes: updated });
-    setDeleteConfirm(null);
+    onTourUpdate({
+      ...tour!,
+      id: tour?.id || 'buildingTour',
+      scenes: updated,
+    });
+    setDeleteConfirmSingle(null);
+  };
+
+  const toggleSelection = (sceneId: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(sceneId) ? prev.filter((id) => id !== sceneId) : [...prev, sceneId]
+    );
+  };
+
+  const confirmDeleteMultiple = () => {
+    const updated = scenes.filter((s) => !selectedIds.includes(s.id));
+    setScenes(updated);
+    onTourUpdate({
+      ...tour!,
+      id: tour?.id || 'buildingTour',
+      scenes: updated,
+    });
+    setSelectedIds([]);
+    setDeleteConfirmOpen(false);
+  };
+
+  const isSelected = (sceneId: string) => selectedIds.includes(sceneId);
+
+  const clearCompletedTasks = () => {
+    setUploadTasks((prev) => prev.filter((t) => t.status !== 'done'));
   };
 
   return (
     <div className="space-y-6">
+      {/* Upload section */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <h3 className="text-lg font-semibold mb-1">📸 Virtual Tour Media Manager</h3>
         <p className="text-sm text-gray-500 mb-4">
-          Upload your 360° panoramic images (JPG, PNG – up to 50MB, auto‑compressed)
+          Upload your 360° panoramic images (JPG, PNG – up to 50MB, auto‑compressed).
+          <br />
+          <span className="text-xs text-green-600">✓ Images are auto‑saved as soon as each upload finishes.</span>
         </p>
 
         <div
-          onDragOver={(e) => {
-            e.preventDefault();
-          }}
+          onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
             handleFiles(e.dataTransfer.files);
@@ -183,51 +282,114 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
         </div>
 
         {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
-        {uploading && (
-          <div className="mt-3">
-            <div className="flex items-center justify-between text-sm text-gray-500 mb-1">
-              <span>Uploading...</span>
-              <span>{uploadProgress}%</span>
+
+        {/* Upload progress list */}
+        {uploadTasks.length > 0 && (
+          <div className="mt-4 space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium text-gray-700">Upload Progress</span>
+              <button
+                onClick={clearCompletedTasks}
+                className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                Clear completed
+              </button>
             </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div
-                className="bg-orange-500 h-2 rounded-full transition-all duration-300"
-                style={{ width: `${uploadProgress}%` }}
-              />
-            </div>
+            {uploadTasks.map((task) => (
+              <div key={task.id} className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-gray-700 truncate">{task.file.name}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-orange-500 rounded-full transition-all duration-300"
+                          style={{ width: `${task.progress}%` }}
+                        />
+                      </div>
+                      <span className="text-[10px] text-gray-400 flex-shrink-0">{task.progress}%</span>
+                    </div>
+                  </div>
+                  <div className="ml-3 flex-shrink-0">
+                    {task.status === 'pending' && <span className="text-xs text-gray-400">Queued</span>}
+                    {task.status === 'uploading' && <Loader2 size={14} className="animate-spin text-orange-500" />}
+                    {task.status === 'done' && <CheckCircle size={14} className="text-green-500" />}
+                    {task.status === 'error' && <X size={14} className="text-red-500" />}
+                  </div>
+                </div>
+                {task.status === 'error' && task.error && (
+                  <p className="text-[10px] text-red-500 mt-1">{task.error}</p>
+                )}
+                {task.status === 'done' && task.sceneId && (
+                  <p className="text-[10px] text-green-600 mt-1">✓ Saved to tour</p>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>
 
+      {/* Gallery / Scene list */}
       <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <h4 className="text-sm font-semibold text-gray-700 mb-3">
-          Uploaded Images ({scenes.length})
-        </h4>
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-semibold text-gray-700">
+            Uploaded Images ({scenes.length})
+          </h4>
+          {selectedIds.length > 0 && (
+            <button
+              onClick={() => setDeleteConfirmOpen(true)}
+              className="bg-red-500 text-white px-3 py-1 rounded-lg text-xs font-medium hover:bg-red-600 transition-colors flex items-center gap-1"
+            >
+              <X size={14} /> Delete Selected ({selectedIds.length})
+            </button>
+          )}
+        </div>
         {scenes.length === 0 ? (
-          <p className="text-xs text-gray-400">No images yet. Upload some above.</p>
+          <p className="text-xs text-gray-400 text-center py-8">No images yet. Upload some above.</p>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
             {scenes.map((scene, idx) => (
-              <div key={scene.id} className="group relative bg-gray-50 rounded-lg border border-gray-200 p-2">
+              <div
+                key={scene.id}
+                className={`group relative bg-gray-50 rounded-lg border-2 p-2 transition-all ${
+                  isSelected(scene.id) ? 'border-orange-500 bg-orange-50' : 'border-gray-200'
+                }`}
+              >
+                <label className="absolute top-2 left-2 z-10 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isSelected(scene.id)}
+                    onChange={() => toggleSelection(scene.id)}
+                    className="w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                  />
+                </label>
+
                 <img
                   src={scene.url}
                   alt={scene.label}
                   className="w-full h-24 object-cover rounded-md mb-1"
                 />
+
                 <input
-                  value={scene.label}
-                  onChange={(e) => handleRename(scene.id, e.target.value)}
+                  value={labelEdits[scene.id] ?? scene.label}
+                  onChange={(e) => setLabelEdits((prev) => ({ ...prev, [scene.id]: e.target.value }))}
+                  onBlur={() => handleRenameCommit(scene.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                  }}
                   className="w-full text-center text-xs bg-transparent border-b border-transparent hover:border-gray-300 focus:border-orange-400 focus:outline-none px-1"
                   placeholder="Enter name"
                 />
+
                 <button
-                  onClick={() => setDeleteConfirm(scene.id)}
+                  onClick={() => handleDeleteSingle(scene.id)}
                   className="absolute top-0 right-0 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                   title="Delete scene"
                 >
                   <X size={10} />
                 </button>
-                <div className="absolute top-0 left-0 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded-br">
+
+                <div className="absolute top-0 left-8 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded-br">
                   {idx + 1}
                 </div>
               </div>
@@ -236,24 +398,38 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
         )}
       </div>
 
-      <div className="flex justify-between items-center">
-        <button onClick={() => window.history.back()} className="text-sm text-gray-500 hover:text-gray-800">
-          {/* back button intentionally left blank */}
-        </button>
+      {/* Bottom actions */}
+      <div className="flex justify-end">
         <button
           onClick={onEnterEditor}
           disabled={scenes.length === 0}
-          className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Go to Editor <ArrowRight size={16} />
         </button>
       </div>
 
+      {/* Confirm Dialogs */}
       <ConfirmDialog
-        open={!!deleteConfirm}
-        onConfirm={confirmDeleteScene}
-        onCancel={() => setDeleteConfirm(null)}
-        message="Delete this scene? It will also remove all associated hotspots."
+        open={!!deleteConfirmSingle}
+        onConfirm={confirmDeleteSingle}
+        onCancel={() => setDeleteConfirmSingle(null)}
+        title="Delete Scene"
+        message="This scene will be permanently removed. All associated hotspots will be lost."
+        confirmText="Delete"
+        cancelText="Cancel"
+        variant="danger"
+      />
+
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        onConfirm={confirmDeleteMultiple}
+        onCancel={() => setDeleteConfirmOpen(false)}
+        title={`Delete ${selectedIds.length} Scene(s)`}
+        message={`This will permanently remove ${selectedIds.length} scene(s) and all their hotspots.`}
+        confirmText="Delete All"
+        cancelText="Cancel"
+        variant="danger"
       />
     </div>
   );

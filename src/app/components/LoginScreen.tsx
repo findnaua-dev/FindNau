@@ -9,6 +9,7 @@ import {
   updateProfile,
   signInWithPopup,
 } from 'firebase/auth';
+import { createOrUpdateUser } from '../../services/userService'; // <-- IMPORTANTE
 
 export default function LoginScreen() {
   const navigate = useNavigate();
@@ -53,7 +54,9 @@ export default function LoginScreen() {
     }
     setLoginLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      const userCredential = await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      // Tiyakin na may Firestore document (gagawa kung wala)
+      await createOrUpdateUser(userCredential.user.uid, loginEmail, userCredential.user.displayName);
     } catch (err: any) {
       setLoginError(err.message);
     } finally {
@@ -81,6 +84,8 @@ export default function LoginScreen() {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, signupEmail, signupPassword);
       await updateProfile(userCredential.user, { displayName: signupName });
+      // Gumawa ng Firestore user document
+      await createOrUpdateUser(userCredential.user.uid, signupEmail, signupName);
       setSignupSuccess(lang === 'en' ? 'Account created! Redirecting...' : 'Nagawa na ang account! Nagre-redirect...');
     } catch (err: any) {
       setSignupError(err.message);
@@ -92,28 +97,24 @@ export default function LoginScreen() {
   // --- Firebase Google sign-in ---
   const handleGoogleSignIn = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      if (result.user) {
+        await createOrUpdateUser(result.user.uid, result.user.email, result.user.displayName);
+      }
     } catch (err: any) {
       setLoginError(err.message);
     }
   };
 
+  // --- JSX (eksaktong galing sa iyong huling bigay) ---
   return (
     <div className="min-h-screen bg-white flex flex-col" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      {/* Header banner – background_logo is visible, orange overlay is semi‑transparent */}
+      {/* Header banner */}
       <div className="relative overflow-hidden" style={{ minHeight: '280px' }}>
-        {/* Background logo – FULLY visible because the overlay is now only 40% opaque */}
         <div className="absolute inset-0">
-          <img
-            src="/background_logo.jpg"
-            alt=""
-            className="w-full h-full object-cover"
-            aria-hidden="true"
-          />
+          <img src="/background_logo.jpg" alt="" className="w-full h-full object-cover" aria-hidden="true" />
         </div>
-        {/* Orange overlay – reduced opacity so the background shows through */}
-        <div className="absolute inset-0 bg-orange-500/40" />
-        {/* Decorative circles */}
+        <div className="absolute inset-0 bg-orange-900/65" />
         <div className="absolute top-[-40px] right-[-40px] w-64 h-64 bg-orange-400 rounded-full opacity-20" />
         <div className="absolute bottom-[-30px] left-[-30px] w-48 h-48 bg-orange-600 rounded-full opacity-15" />
         <div className="absolute top-[80px] right-[20px] w-20 h-20 bg-orange-300 rounded-full opacity-20" />
@@ -128,13 +129,9 @@ export default function LoginScreen() {
         </button>
 
         <div className="relative z-10 flex flex-col items-center text-white px-6 pt-10 pb-16">
-        <div className="w-20 h-20 bg-white rounded-full p-1 mb-4 shadow-lg">
-          <img
-            src="/logo.jpg"
-            alt="Naujan Municipality Logo"
-            className="w-full h-full object-cover rounded-full"
-          />
-        </div>
+          <div className="w-20 h-20 p-1 mb-4.5 shadow-lg">
+            <img src="/logo.jpg" alt="Naujan Municipality Logo" />
+          </div>
           <h1 className="text-3xl font-bold text-white tracking-tight drop-shadow-lg">FindNau</h1>
           <p className="text-orange-50 text-sm text-center mt-1 font-medium drop-shadow-md">
             Municipal Building Navigation & E-Services

@@ -1,64 +1,114 @@
-import { useState, useEffect, useCallback } from 'react';
-import { QrCode, Download, Plus, Copy, Eye, Trash2, Check, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { QrCode, Download, Plus, Copy, Eye, Check, RefreshCw } from 'lucide-react';
 import { useOffices } from '../../../hooks/useOffices';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../../../firebase';
 import QRCode from 'qrcode';
 
 interface QREntry {
   officeId: string;
   officeName: string;
   shortName: string;
-  qrDataUrl: string;        // base64 PNG ng QR
-  scans: number;            // pwedeng i‑track sa Firestore later
+  qrDataUrl: string;
+  scans: number;       // ngayon ay bilang ng unique users
   active: boolean;
 }
 
 export default function AdminQR() {
   const { offices, loading } = useOffices();
-  const [qrCodes, setQrCodes] = useState<QREntry[]>([]);
+  const [qrDataUrls, setQrDataUrls] = useState<{ officeId: string; qrDataUrl: string }[]>([]);
+  const [scanCounts, setScanCounts] = useState<Record<string, number>>({}); // officeId → unique user count
+  const [activeStates, setActiveStates] = useState<Record<string, boolean>>({});
   const [selectedOffice, setSelectedOffice] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState<string | null>(null);
 
-  const baseUrl = 'https://findnau.naujan.gov.ph/office/';  // adjust kung iba
+  const baseUrl = 'https://findnau.naujan.gov.ph/office/';
 
-  // Generate QR data URI from office ID
-  const generateQrDataUrl = useCallback(async (officeId: string) => {
-    const url = `${baseUrl}${officeId}`;
-    return await QRCode.toDataURL(url, {
-      width: 300,
-      margin: 2,
-      color: { dark: '#000000', light: '#ffffff' }
-    });
-  }, [baseUrl]);
-
-  // I‑re‑build ang QR codes list tuwing mag‑bago ang offices
+  // Generate QR data URLs whenever offices change
   useEffect(() => {
     if (loading || offices.length === 0) return;
-    (async () => {
-      const entries: QREntry[] = [];
-      for (const office of offices) {
-        if (!office.id) continue;
-        try {
-          const qrDataUrl = await generateQrDataUrl(office.id);
-          entries.push({
-            officeId: office.id,
-            officeName: office.name,
-            shortName: office.shortName,
-            qrDataUrl,
-            scans: Math.floor(Math.random() * 500 + 50), // placeholder
-            active: true,
-          });
-        } catch (err) {
-          console.error(err);
-        }
+
+    const generateAllQr = async () => {
+      const dataUrls = await Promise.all(
+        offices
+          .filter(o => o.id)
+          .map(async (o) => ({
+            officeId: o.id!,
+            qrDataUrl: await QRCode.toDataURL(`${baseUrl}${o.id}`, {
+              width: 300,
+              margin: 2,
+              color: { dark: '#000000', light: '#ffffff' }
+            })
+          }))
+      );
+      setQrDataUrls(dataUrls);
+    };
+
+    generateAllQr();
+  }, [offices, loading, baseUrl]);
+
+  // ✅ Binago: bumibilang ng NATATANGING users (unique userId) bawat office
+  const fetchScanCounts = useCallback(async () => {
+    try {
+      const snap = await getDocs(collection(db, 'qrScans'));
+      const uniqueUsers: Record<string, Set<string>> = {};   // officeId → Set of userIds
+
+      snap.forEach(doc => {
+        const data = doc.data();
+        const officeId = data.officeId;
+        const userId = data.userId || 'guest';
+        if (!officeId) return;
+
+        if (!uniqueUsers[officeId]) uniqueUsers[officeId] = new Set();
+        uniqueUsers[officeId].add(userId);
+      });
+
+      // I-convert ang Set sizes sa record ng numbers
+      const counts: Record<string, number> = {};
+      for (const [officeId, userSet] of Object.entries(uniqueUsers)) {
+        counts[officeId] = userSet.size;
       }
-      setQrCodes(entries);
-    })();
-  }, [offices, loading, generateQrDataUrl]);
+
+      setScanCounts(counts);
+    } catch (err) {
+      console.error('Failed to load unique scan counts:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchScanCounts();
+  }, [fetchScanCounts]);
+
+  // Initialize all offices as active (default true)
+  useEffect(() => {
+    if (offices.length > 0) {
+      const initialActive: Record<string, boolean> = {};
+      offices.forEach(o => {
+        if (o.id) initialActive[o.id] = true;
+      });
+      setActiveStates(prev => ({ ...initialActive, ...prev }));
+    }
+  }, [offices]);
+
+  // Combine QR URLs, office data, scan counts and active states into final entries
+  const qrCodes = useMemo<QREntry[]>(() => {
+    return qrDataUrls.map(({ officeId, qrDataUrl }) => {
+      const office = offices.find(o => o.id === officeId);
+      return {
+        officeId,
+        officeName: office?.name || '',
+        shortName: office?.shortName || '',
+        qrDataUrl,
+        scans: scanCounts[officeId] || 0,   // ngayon unique users na
+        active: activeStates[officeId] !== undefined ? activeStates[officeId] : true,
+      };
+    });
+  }, [qrDataUrls, offices, scanCounts, activeStates]);
 
   const selectedQR = qrCodes.find(q => q.officeId === selectedOffice);
   const selectedOfficeData = offices.find(o => o.id === selectedOffice);
-  const totalScans = qrCodes.reduce((s, q) => s + q.scans, 0);
+  const totalScans = Object.values(scanCounts).reduce((a, b) => a + b, 0); // total unique users across all offices
 
   const handleCopy = (id: string) => {
     const url = `${baseUrl}${id}`;
@@ -69,34 +119,38 @@ export default function AdminQR() {
 
   const handleRegenerate = async (officeId: string) => {
     setRegenerating(officeId);
-    const newQrDataUrl = await generateQrDataUrl(officeId);
-    setQrCodes(prev => prev.map(q =>
-      q.officeId === officeId ? { ...q, qrDataUrl: newQrDataUrl, scans: 0 } : q
-    ));
+    const newQrDataUrl = await QRCode.toDataURL(`${baseUrl}${officeId}`, {
+      width: 300,
+      margin: 2,
+      color: { dark: '#000000', light: '#ffffff' }
+    });
+    setQrDataUrls(prev =>
+      prev.map(item =>
+        item.officeId === officeId ? { ...item, qrDataUrl: newQrDataUrl } : item
+      )
+    );
     setRegenerating(null);
   };
 
   const handleToggleActive = (officeId: string) => {
-    setQrCodes(prev => prev.map(q =>
-      q.officeId === officeId ? { ...q, active: !q.active } : q
-    ));
+    setActiveStates(prev => ({
+      ...prev,
+      [officeId]: !prev[officeId]
+    }));
   };
 
   const handleGenerateAll = async () => {
-    const newEntries = await Promise.all(
-      offices.filter(o => o.id).map(async office => {
-        const qrDataUrl = await generateQrDataUrl(office.id!);
-        return {
-          officeId: office.id!,
-          officeName: office.name,
-          shortName: office.shortName,
-          qrDataUrl,
-          scans: Math.floor(Math.random() * 500 + 50),
-          active: true,
-        };
-      })
+    const newDataUrls = await Promise.all(
+      offices.filter(o => o.id).map(async o => ({
+        officeId: o.id!,
+        qrDataUrl: await QRCode.toDataURL(`${baseUrl}${o.id}`, {
+          width: 300,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' }
+        })
+      }))
     );
-    setQrCodes(newEntries);
+    setQrDataUrls(newDataUrls);
   };
 
   const handleDownload = (qrDataUrl: string, shortName: string) => {
@@ -124,7 +178,6 @@ export default function AdminQR() {
         </button>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-3 gap-3">
         <div className="bg-white rounded-2xl border border-gray-100 p-4 text-center">
           <p className="text-2xl font-bold text-gray-800">{qrCodes.length}</p>
@@ -132,7 +185,7 @@ export default function AdminQR() {
         </div>
         <div className="bg-white rounded-2xl border border-gray-100 p-4 text-center">
           <p className="text-2xl font-bold text-orange-500">{totalScans.toLocaleString()}</p>
-          <p className="text-xs text-gray-400 mt-0.5">Total Scans</p>
+          <p className="text-xs text-gray-400 mt-0.5">Unique Visitors</p>   {/* ← pinalitan ang label */}
         </div>
         <div className="bg-white rounded-2xl border border-gray-100 p-4 text-center">
           <p className="text-2xl font-bold text-green-500">{qrCodes.filter(q => q.active).length}</p>
@@ -141,7 +194,6 @@ export default function AdminQR() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* QR Code list */}
         <div className="space-y-2.5">
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Office QR Codes</p>
           {qrCodes.map(qr => {
@@ -169,7 +221,7 @@ export default function AdminQR() {
                         <div className="w-4 h-4 bg-white rounded-full shadow-sm" />
                       </div>
                     </div>
-                    <p className="text-xs text-gray-400 mt-0.5">{qr.shortName} · {qr.scans} scans</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{qr.shortName} · {qr.scans} {qr.scans === 1 ? 'visitor' : 'visitors'}</p>
                   </div>
                 </div>
 
@@ -203,7 +255,6 @@ export default function AdminQR() {
           })}
         </div>
 
-        {/* QR Preview (katulad ng dati pero gumagamit ng tunay na image) */}
         <div className="space-y-4">
           {selectedOfficeData && selectedQR ? (
             <div className="bg-white rounded-2xl border border-gray-100 p-5">
@@ -224,7 +275,7 @@ export default function AdminQR() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="bg-gray-50 rounded-xl px-3 py-2.5">
-                      <p className="text-[10px] text-gray-400">Total Scans</p>
+                      <p className="text-[10px] text-gray-400">Unique Visitors</p>
                       <p className="text-sm font-bold text-gray-800">{selectedQR.scans.toLocaleString()}</p>
                     </div>
                     <div className="bg-gray-50 rounded-xl px-3 py-2.5">

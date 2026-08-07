@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router';
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, CartesianGrid,
+  ResponsiveContainer,
 } from 'recharts';
 import {
   Users, Briefcase, Building2, QrCode, TrendingUp, ChevronRight, Activity,
@@ -8,75 +9,181 @@ import {
 import { useOffices } from '../../../hooks/useOffices';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { Notification } from '../../../services/notificationService';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../../../firebase';
 
-// 📏 Safe width hook – prevents freeze
-function useContainerWidth(ref: React.RefObject<HTMLDivElement | null>) {
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    if (!ref.current) return;
-    const el = ref.current;
-    const update = () => { if (el) setWidth(el.getBoundingClientRect().width); };
-    update();
-    const observer = new ResizeObserver(() => update());
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [ref]);
-  return width;
-}
+const deepEqual = (a: any, b: any): boolean => {
+  if (a === b) return true;
+  return JSON.stringify(a) === JSON.stringify(b);
+};
 
-const StatCard = ({ icon: Icon, label, value, change, color }: {
-  icon: React.ElementType; label: string; value: string | number; change: string; color: string;
-}) => (
-  <div className="bg-white rounded-2xl border border-gray-100 p-4">
-    <div className="flex items-start justify-between mb-3">
-      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${color}`}>
-        <Icon size={18} className="text-white" />
-      </div>
-      <span className="text-xs text-green-500 font-semibold bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-0.5">
-        <TrendingUp size={10} />
-        {change}
-      </span>
+const ServicesBarChart = memo(
+  ({ data }: { data: any[] }) => (
+    <div style={{ width: '100%', height: 250 }}>
+      {data.length > 0 ? (
+        <ResponsiveContainer>
+          <BarChart data={data} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+            <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
+            <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
+            <Tooltip contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', fontSize: 12 }} />
+            <Bar dataKey="count" fill="#F97316" radius={[6, 6, 0, 0]} isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      ) : (
+        <p className="text-xs text-gray-400 py-8 text-center">No offices yet</p>
+      )}
     </div>
-    <p className="text-2xl font-bold text-gray-800">{value.toLocaleString()}</p>
-    <p className="text-xs text-gray-400 mt-0.5">{label}</p>
-  </div>
+  ),
+  (prev, next) => deepEqual(prev.data, next.data)
 );
 
-const COLORS = ['#F97316', '#1D4ED8', '#059669', '#DC2626', '#7C3AED'];
+const ServicePieChart = memo(
+  ({ data }: { data: any[] }) => {
+    const COLORS = ['#F97316', '#1D4ED8', '#059669', '#DC2626', '#7C3AED'];
+    return (
+      <div>
+        <div style={{ width: '100%', height: 250 }}>
+          {data.length > 0 ? (
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie
+                  data={data}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={50}
+                  outerRadius={80}
+                  dataKey="count"
+                  nameKey="name"
+                  isAnimationActive={false}
+                >
+                  {data.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.fill || COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', fontSize: 12 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-xs text-gray-400 py-8 text-center">No offices yet</p>
+          )}
+        </div>
+        <div className="mt-3 max-h-32 overflow-y-auto">
+          <div className="grid grid-cols-2 gap-1.5">
+            {data.map((item, i) => (
+              <div key={i} className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: item.fill }} />
+                <p className="text-[11px] text-gray-600 truncate">{item.name}</p>
+                <p className="text-[11px] font-semibold text-gray-800 ml-auto">{item.count}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  },
+  (prev, next) => deepEqual(prev.data, next.data)
+);
+
+const VisitsBarChart = memo(
+  ({ data }: { data: any[] }) => (
+    <div style={{ width: '100%', height: 250 }}>
+      {data.length > 0 ? (
+        <ResponsiveContainer>
+          <BarChart data={data} layout="vertical" margin={{ top: 0, right: 20, left: 20, bottom: 0 }}>
+            <XAxis type="number" tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
+            <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: '#374151' }} axisLine={false} tickLine={false} width={80} />
+            <Tooltip contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', fontSize: 12 }} />
+            <Bar dataKey="visits" fill="#1D4ED8" radius={[0, 6, 6, 0]} isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      ) : (
+        <p className="text-xs text-gray-400 py-8 text-center">No offices yet</p>
+      )}
+    </div>
+  ),
+  (prev, next) => deepEqual(prev.data, next.data)
+);
+
+const StatCard = memo(
+  ({
+    icon: Icon,
+    label,
+    value,
+    change,
+    color,
+  }: {
+    icon: React.ElementType;
+    label: string;
+    value: string | number;
+    change: string;
+    color: string;
+  }) => (
+    <div className="bg-white rounded-2xl border border-gray-100 p-4">
+      <div className="flex items-start justify-between mb-3">
+        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${color}`}>
+          <Icon size={18} className="text-white" />
+        </div>
+        <span className="text-xs text-green-500 font-semibold bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-0.5">
+          <TrendingUp size={10} />
+          {change}
+        </span>
+      </div>
+      <p className="text-2xl font-bold text-gray-800">{value.toLocaleString()}</p>
+      <p className="text-xs text-gray-400 mt-0.5">{label}</p>
+    </div>
+  )
+);
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const { offices, loading: officesLoading } = useOffices();
   const { notifications } = useNotifications();
 
-  // Refs for chart containers
-  const barChartRef = useRef<HTMLDivElement | null>(null);
-  const pieChartRef = useRef<HTMLDivElement | null>(null);
-  const horizontalBarRef = useRef<HTMLDivElement | null>(null);
+  const [totalUsers, setTotalUsers] = useState(0);
+  const [totalQRScans, setTotalQRScans] = useState(0);
+  const [statsLoading, setStatsLoading] = useState(true);
 
-  const barWidth = useContainerWidth(barChartRef);
-  const pieWidth = useContainerWidth(pieChartRef);
-  const horizontalBarWidth = useContainerWidth(horizontalBarRef);
-  const CHART_HEIGHT = 250;
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const usersSnap = await getDocs(collection(db, 'users'));
+        setTotalUsers(usersSnap.size);
+        const scansSnap = await getDocs(collection(db, 'qrScans'));
+        setTotalQRScans(scansSnap.size);
+      } catch (err) {
+        console.warn('Stats fetch failed:', err);
+      } finally {
+        setStatsLoading(false);
+      }
+    };
+    fetchStats();
+  }, []);
 
-  // Dynamic stats from Firestore
   const totalOffices = offices.length;
   const totalServices = offices.reduce((sum, o) => sum + o.services.length, 0);
 
-  // Chart data from offices
-  const serviceRequestsData = offices.map(o => ({
-    name: o.shortName,
-    count: o.services.length,
-    fill: o.iconBg,
-  }));
-  const officeVisitsData = offices.map(o => ({
-    name: o.shortName,
-    visits: Math.floor(Math.random() * 300 + 100), // placeholder – you can replace with real visit data later
-  }));
+  const allOfficesData = useMemo(
+    () =>
+      offices.map((o) => ({
+        name: o.shortName,
+        count: o.services.length,
+        fill: o.iconBg || '#F97316',
+      })),
+    [offices]
+  );
 
-  // Show loading while offices are being fetched
-  if (officesLoading) {
+  const allOfficesVisits = useMemo(
+    () =>
+      offices.map((o) => ({
+        name: o.shortName,
+        visits: 0,
+      })),
+    [offices]
+  );
+
+  if (officesLoading || statsLoading) {
     return (
       <div className="p-8 text-center text-gray-400">
         <Activity size={32} className="mx-auto mb-3 animate-pulse" />
@@ -86,8 +193,7 @@ export default function AdminDashboard() {
   }
 
   return (
-    <div className="space-y-6 max-w-6xl" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      {/* Welcome banner */}
+    <div className="space-y-6 max-w-6xl mx-auto" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
       <div className="bg-gradient-to-r from-orange-500 to-orange-600 rounded-2xl p-5 text-white">
         <div className="flex items-start justify-between">
           <div>
@@ -105,17 +211,14 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Stats Cards – fully dynamic */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard icon={Users} label="Total Users" value={0} change="N/A" color="bg-orange-500" />
+        <StatCard icon={Users} label="Registered Users" value={totalUsers} change="real‑time" color="bg-orange-500" />
         <StatCard icon={Briefcase} label="Services" value={totalServices} change="real‑time" color="bg-blue-600" />
         <StatCard icon={Building2} label="Offices" value={totalOffices} change="real‑time" color="bg-green-600" />
-        <StatCard icon={QrCode} label="QR Scans" value={0} change="N/A" color="bg-purple-600" />
+        <StatCard icon={QrCode} label="QR Scans" value={totalQRScans} change="real‑time" color="bg-purple-600" />
       </div>
 
-      {/* Charts Row – safe, no freeze */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Bar Chart */}
         <div className="bg-white rounded-2xl border border-gray-100 p-4">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -126,50 +229,18 @@ export default function AdminDashboard() {
               {totalServices} total
             </span>
           </div>
-          <div ref={barChartRef} style={{ minHeight: CHART_HEIGHT }}>
-            {barWidth > 0 && (
-              <BarChart width={barWidth} height={CHART_HEIGHT} data={serviceRequestsData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', fontSize: 12 }} />
-                <Bar dataKey="count" fill="#F97316" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            )}
-          </div>
+          <ServicesBarChart data={allOfficesData} />
         </div>
 
-        {/* Pie Chart */}
         <div className="bg-white rounded-2xl border border-gray-100 p-4">
           <div className="mb-4">
             <h3 className="text-sm font-semibold text-gray-800">Service Distribution</h3>
-            <p className="text-xs text-gray-400">By office</p>
+            <p className="text-xs text-gray-400">All offices</p>
           </div>
-          <div ref={pieChartRef} style={{ minHeight: CHART_HEIGHT }}>
-            {pieWidth > 0 && (
-              <PieChart width={pieWidth} height={CHART_HEIGHT}>
-                <Pie data={serviceRequestsData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="count" nameKey="name">
-                  {serviceRequestsData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.fill || COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', fontSize: 12 }} />
-              </PieChart>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-1.5 mt-2">
-            {serviceRequestsData.map((item, i) => (
-              <div key={i} className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: item.fill }} />
-                <p className="text-[11px] text-gray-500 truncate">{item.name}</p>
-                <p className="text-[11px] font-semibold text-gray-700 ml-auto">{item.count}</p>
-              </div>
-            ))}
-          </div>
+          <ServicePieChart data={allOfficesData} />
         </div>
       </div>
 
-      {/* Horizontal Bar Chart */}
       <div className="bg-white rounded-2xl border border-gray-100 p-4">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -177,23 +248,15 @@ export default function AdminDashboard() {
             <p className="text-xs text-gray-400">Placeholder data</p>
           </div>
         </div>
-        <div ref={horizontalBarRef} style={{ minHeight: CHART_HEIGHT }}>
-          {horizontalBarWidth > 0 && (
-            <BarChart width={horizontalBarWidth} height={CHART_HEIGHT} data={officeVisitsData} layout="vertical" margin={{ top: 0, right: 20, left: 20, bottom: 0 }}>
-              <XAxis type="number" tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
-              <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: '#374151' }} axisLine={false} tickLine={false} width={80} />
-              <Tooltip contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', fontSize: 12 }} />
-              <Bar dataKey="visits" fill="#1D4ED8" radius={[0, 6, 6, 0]} />
-            </BarChart>
-          )}
-        </div>
+        <VisitsBarChart data={allOfficesVisits} />
       </div>
 
-      {/* Recent Notifications – dynamic */}
       <div className="bg-white rounded-2xl border border-gray-100 p-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-gray-800">Recent Notifications</h3>
-          <button onClick={() => navigate('/admin/notifications')} className="text-xs text-orange-500 font-medium">View all</button>
+          <button onClick={() => navigate('/admin/notifications')} className="text-xs text-orange-500 font-medium">
+            View all
+          </button>
         </div>
         <div className="space-y-3">
           {notifications.length === 0 ? (
@@ -213,7 +276,6 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Quick Actions */}
       <div className="bg-white rounded-2xl border border-gray-100 p-4">
         <h3 className="text-sm font-semibold text-gray-800 mb-3">Quick Actions</h3>
         <div className="space-y-2">

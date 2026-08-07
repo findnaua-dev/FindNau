@@ -36,11 +36,10 @@ function SidebarContent({
       {/* Brand with real logo */}
       <div className="px-5 py-6 border-b border-gray-100">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden">
+          <div className="w-6 h-6 rounded-xl flex items-center justify-center ">
             <img
               src="/logo.jpg"
               alt="FindNau Logo"
-              className="w-full h-full object-cover rounded-xl"
             />
           </div>
           <div>

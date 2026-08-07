@@ -14,6 +14,7 @@ interface HotspotData {
   targetOfficeId?: string;
   shape?: 'circle' | 'square' | 'diamond' | 'hexagon' | 'rounded' | 'arrow';
   size?: number;
+  direction?: number; // only used for 'arrow' shape
 }
 
 interface ViewerProps {
@@ -24,6 +25,7 @@ interface ViewerProps {
   onClickScene?: (lon: number, lat: number) => void;
   onDropScene?: (lon: number, lat: number, targetSceneId: string) => void;
   onHotspotMove?: (hotspotId: string, newLon: number, newLat: number) => void;
+  onHotspotMoveEnd?: (hotspotId: string, newLon: number, newLat: number) => void; // fired on pointer up
   onReticleHit?: (hotspot: HotspotData | null) => void;
   enableClickToPlace?: boolean;
   enableReticle?: boolean;
@@ -67,6 +69,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       onClickScene,
       onDropScene,
       onHotspotMove,
+      onHotspotMoveEnd,
       onReticleHit,
       enableClickToPlace = false,
       enableReticle = false,
@@ -95,6 +98,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
     const pointerDownPos = useRef<{ x: number; y: number } | null>(null);
     const dragMoved = useRef(false);
     const isDraggingOverlayRef = useRef(false); // to disable orbit during hotspot drag
+    const lastDragPos = useRef<{ lon: number; lat: number } | null>(null); // to fire moveEnd with final position
 
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState(false);
@@ -103,6 +107,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
     const [transitionActive, setTransitionActive] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
+    // Keep a ref to the onDropScene callback
     const onDropSceneRef = useRef(onDropScene);
     useEffect(() => { onDropSceneRef.current = onDropScene; }, [onDropScene]);
 
@@ -261,7 +266,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         });
     }, [sceneUrl, brightness]);
 
-    // Update hotspot sprites – ONLY when hotspots array changes
+    // Update hotspot sprites – with directional arrows
     useEffect(() => {
       const group = hotspotsGroupRef.current;
       // Clear existing sprites
@@ -284,9 +289,19 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         canvas.height = baseSize * size;
         const ctx = canvas.getContext('2d')!;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const cx = canvas.width / 2, cy = canvas.height / 2;
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
 
-        // Base circle
+        // Apply rotation only for arrow shape
+        const direction = h.direction || 0;
+        if (h.shape === 'arrow' && direction !== 0) {
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(THREE.MathUtils.degToRad(direction));
+          ctx.translate(-cx, -cy);
+        }
+
+        // Base circle background
         ctx.beginPath();
         ctx.arc(cx, cy, (baseSize / 2 - 2) * size, 0, 2 * Math.PI);
         ctx.fillStyle = h.color || '#F97316';
@@ -302,12 +317,54 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         ctx.lineWidth = 2 * size;
 
         switch (shape) {
-          case 'square': ctx.fillRect(cx - iconSize, cy - iconSize, iconSize * 2, iconSize * 2); break;
-          case 'diamond': ctx.beginPath(); ctx.moveTo(cx, cy - iconSize); ctx.lineTo(cx + iconSize, cy); ctx.lineTo(cx, cy + iconSize); ctx.lineTo(cx - iconSize, cy); ctx.closePath(); ctx.fill(); break;
-          case 'hexagon': ctx.beginPath(); for (let i = 0; i < 6; i++) { const a = (Math.PI / 3) * i - Math.PI / 6; const x = cx + iconSize * Math.cos(a); const y = cy + iconSize * Math.sin(a); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); } ctx.closePath(); ctx.fill(); break;
-          case 'rounded': ctx.beginPath(); ctx.roundRect(cx - iconSize, cy - iconSize, iconSize * 2, iconSize * 2, iconSize * 0.3); ctx.fill(); break;
-          case 'arrow': ctx.beginPath(); ctx.moveTo(cx, cy - iconSize); ctx.lineTo(cx + iconSize, cy); ctx.lineTo(cx + iconSize * 0.4, cy); ctx.lineTo(cx + iconSize * 0.4, cy + iconSize); ctx.lineTo(cx - iconSize * 0.4, cy + iconSize); ctx.lineTo(cx - iconSize * 0.4, cy); ctx.lineTo(cx - iconSize, cy); ctx.closePath(); ctx.fill(); break;
-          default: ctx.beginPath(); ctx.arc(cx, cy, iconSize, 0, 2 * Math.PI); ctx.fill();
+          case 'square':
+            ctx.fillRect(cx - iconSize, cy - iconSize, iconSize * 2, iconSize * 2);
+            break;
+          case 'diamond':
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - iconSize);
+            ctx.lineTo(cx + iconSize, cy);
+            ctx.lineTo(cx, cy + iconSize);
+            ctx.lineTo(cx - iconSize, cy);
+            ctx.closePath();
+            ctx.fill();
+            break;
+          case 'hexagon':
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+              const a = (Math.PI / 3) * i - Math.PI / 6;
+              const x = cx + iconSize * Math.cos(a);
+              const y = cy + iconSize * Math.sin(a);
+              i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+            ctx.fill();
+            break;
+          case 'rounded':
+            ctx.beginPath();
+            ctx.roundRect(cx - iconSize, cy - iconSize, iconSize * 2, iconSize * 2, iconSize * 0.3);
+            ctx.fill();
+            break;
+          case 'arrow':
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - iconSize);
+            ctx.lineTo(cx + iconSize, cy);
+            ctx.lineTo(cx + iconSize * 0.4, cy);
+            ctx.lineTo(cx + iconSize * 0.4, cy + iconSize);
+            ctx.lineTo(cx - iconSize * 0.4, cy + iconSize);
+            ctx.lineTo(cx - iconSize * 0.4, cy);
+            ctx.lineTo(cx - iconSize, cy);
+            ctx.closePath();
+            ctx.fill();
+            break;
+          default: // circle
+            ctx.beginPath();
+            ctx.arc(cx, cy, iconSize, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+
+        if (h.shape === 'arrow') {
+          ctx.restore();
         }
 
         const texture = new THREE.CanvasTexture(canvas);
@@ -371,6 +428,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
           if (hits.length > 0) {
             draggedSpriteRef.current = hits[0].object as THREE.Sprite;
             isDraggingOverlayRef.current = true; // disable orbit
+            lastDragPos.current = { lon: 0, lat: 0 }; // will be set on first move
             e.preventDefault();
             return;
           }
@@ -394,6 +452,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
             const point = intersects[0].point.clone().normalize();
             const lat = 90 - Math.acos(point.y) * (180 / Math.PI);
             const lon = Math.atan2(point.z, -point.x) * (180 / Math.PI);
+            lastDragPos.current = { lon, lat };
             onHotspotMove?.(draggedSpriteRef.current.userData.hotspot.id, lon, lat);
           }
           return;
@@ -412,8 +471,17 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
 
       const onPointerUp = (e: MouseEvent | TouchEvent) => {
         if (draggedSpriteRef.current) {
+          // Fire moveEnd with the final position
+          if (onHotspotMoveEnd && lastDragPos.current) {
+            onHotspotMoveEnd(
+              draggedSpriteRef.current.userData.hotspot.id,
+              lastDragPos.current.lon,
+              lastDragPos.current.lat
+            );
+          }
           draggedSpriteRef.current = null;
           isDraggingOverlayRef.current = false;
+          lastDragPos.current = null;
           return;
         }
 
@@ -501,7 +569,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         window.removeEventListener('mouseup', onPointerUp);
         window.removeEventListener('touchend', onPointerUp);
       };
-    }, [isAdmin, onHotspotClick, onClickScene, enableClickToPlace, onHotspotMove]);
+    }, [isAdmin, onHotspotClick, onClickScene, enableClickToPlace, onHotspotMove, onHotspotMoveEnd]);
 
     // Gaze timer
     useEffect(() => {

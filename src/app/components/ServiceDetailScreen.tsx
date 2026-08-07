@@ -191,7 +191,7 @@ export default function ServiceDetailScreen() {
           </div>
         )}
 
-        {/* STEPS TAB – table with horizontal scroll (for mobile) */}
+        {/* STEPS TAB – now with CLIENT STEP column */}
         {activeTab === 'steps' && (
           <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
             <div className="px-4 pt-4 pb-2 border-b border-gray-50">
@@ -201,10 +201,12 @@ export default function ServiceDetailScreen() {
               <p className="text-xs text-gray-400 p-4">{t('No steps defined.', 'Walang tinukoy na mga hakbang.')}</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-sm min-w-[700px]">
+                {/* Increased min-width to fit new column */}
+                <table className="w-full text-sm min-w-[800px]">
                   <thead className="bg-gray-50">
                     <tr>
                       <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">#</th>
+                      <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">{t('Client Step', 'Hakbang')}</th>
                       <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">{t('Action', 'Aksyon')}</th>
                       <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">{t('Fee', 'Bayad')}</th>
                       <th className="text-left px-4 py-2 text-xs font-semibold text-gray-500 uppercase">{t('Time', 'Oras')}</th>
@@ -215,6 +217,7 @@ export default function ServiceDetailScreen() {
                     {steps.map((st: ServiceStep, i: number) => (
                       <tr key={i}>
                         <td className="px-4 py-3 text-xs text-gray-400">{st.step}</td>
+                        <td className="px-4 py-3 text-xs text-gray-700 whitespace-nowrap">{st.clientStep || '—'}</td>
                         <td className="px-4 py-3 text-xs text-gray-700 whitespace-nowrap">{st.action}</td>
                         <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{st.fee}</td>
                         <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{st.processingTime}</td>
@@ -222,7 +225,8 @@ export default function ServiceDetailScreen() {
                       </tr>
                     ))}
                     <tr className="bg-orange-50 font-semibold">
-                      <td colSpan={2} className="px-4 py-2 text-xs text-gray-700 uppercase">{t('Total', 'Kabuuan')}</td>
+                      {/* colSpan adjusted: now spans first three columns (#, Client Step, Action) */}
+                      <td colSpan={3} className="px-4 py-2 text-xs text-gray-700 uppercase">{t('Total', 'Kabuuan')}</td>
                       <td className="px-4 py-2 text-xs text-orange-600">₱{totalFee.toFixed(2)}</td>
                       <td className="px-4 py-2 text-xs text-gray-600">{service.processingTime}</td>
                       <td className="px-4 py-2 text-xs text-gray-600"></td>

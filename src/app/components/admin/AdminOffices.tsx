@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import {
   Plus, Search, Trash2, ChevronDown, ChevronUp, Save,
   PlusCircle, MinusCircle, Edit2, X, Building2, Package, Video,
+  CheckCircle,
 } from 'lucide-react';
 import { Office, Service, ServiceRequirement, ServiceStep } from '../../../services/officeService';
 import {
@@ -11,9 +12,27 @@ import {
 } from '../../../services/officeService';
 import { addNotification } from '../../../services/notificationService';
 import { useOffices, OfficeWithServices } from '../../../hooks/useOffices';
+import { useMapSettingsRealtime, MapFloor } from '../../../services/mapService';
+import {
+  useBuildingTourRealtime,
+  VRTour,
+  VRScene,
+  VRHotspot,
+} from '../../../services/vrTourService';
+// ----- direktang Firestore imports (kapalit ng updateBuildingTour) -----
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '../../../firebase';
 
+// ---------- Empty initializers ----------
 const emptyReq: ServiceRequirement = { requirement: '', source: '' };
-const emptyStep: ServiceStep = { step: 1, action: '', fee: '', processingTime: '', personResponsible: '' };
+const emptyStep: ServiceStep = {
+  step: 1,
+  clientStep: '',
+  action: '',
+  fee: '',
+  processingTime: '',
+  personResponsible: '',
+};
 
 // ==================== MEMOIZED SERVICE FORM MODAL ====================
 const ServiceFormModal = memo(
@@ -28,6 +47,7 @@ const ServiceFormModal = memo(
     onClose: () => void;
     onSaved: () => void;
   }) {
+    // --- WALANG BINAGO sa loob ng ServiceFormModal ---
     const init = (s: Service | null) => ({
       name: s?.name || '',
       nameFil: s?.nameFilipino || '',
@@ -86,10 +106,10 @@ const ServiceFormModal = memo(
         requirements: form.reqs.filter(r => r.requirement.trim()),
         requirementsFilipino: form.reqsFil.filter(r => r.requirement.trim()),
         steps: form.steps
-          .filter(s => s.action.trim())
+          .filter(s => s.action.trim() || s.clientStep?.trim())
           .map((s, i) => ({ ...s, step: i + 1 })),
         stepsFilipino: form.stepsFil
-          .filter(s => s.action.trim())
+          .filter(s => s.action.trim() || s.clientStep?.trim())
           .map((s, i) => ({ ...s, step: i + 1 })),
         processingTime: form.time || 'N/A',
         fee: form.fee || 'Free',
@@ -144,7 +164,7 @@ const ServiceFormModal = memo(
           </div>
 
           <div className="p-5 space-y-5 max-h-[calc(100vh-10rem)] overflow-y-auto">
-            {/* BASIC FIELDS */}
+            {/* ======= BASIC FIELDS ======= */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">
@@ -251,7 +271,7 @@ const ServiceFormModal = memo(
               </div>
             </div>
 
-            {/* REQUIREMENTS EN */}
+            {/* ======= REQUIREMENTS EN ======= */}
             <SectionWithAdd label="Requirements (EN) | Where to secure" onAdd={() => addReq('reqs')}>
               {form.reqs.map((req, idx) => (
                 <div key={idx} className="flex items-center gap-2 mb-2">
@@ -286,7 +306,7 @@ const ServiceFormModal = memo(
               ))}
             </SectionWithAdd>
 
-            {/* REQUIREMENTS FIL */}
+            {/* ======= REQUIREMENTS FIL ======= */}
             <SectionWithAdd label="Requirements (Filipino) | Saan kukunin" onAdd={() => addReq('reqsFil')}>
               {form.reqsFil.map((req, idx) => (
                 <div key={idx} className="flex items-center gap-2 mb-2">
@@ -321,11 +341,21 @@ const ServiceFormModal = memo(
               ))}
             </SectionWithAdd>
 
-            {/* STEPS EN */}
-            <SectionWithAdd label="Client Steps (EN) – Action | Fees | Time | Person" onAdd={() => addStep('steps')}>
+            {/* ======= CLIENT STEPS EN (5 INPUTS) ======= */}
+            <SectionWithAdd label="Client Steps (EN) – Client step | Action unit | Fees | Time | Person" onAdd={() => addStep('steps')}>
               {form.steps.map((st, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-2 mb-2 items-center">
                   <span className="col-span-1 text-xs text-gray-500">{idx + 1}</span>
+                  <input
+                    value={st.clientStep}
+                    onChange={e => {
+                      const copy = [...form.steps];
+                      copy[idx] = { ...copy[idx], clientStep: e.target.value };
+                      updateField('steps', copy);
+                    }}
+                    placeholder="Client step"
+                    className="col-span-2 border rounded-lg px-2 py-1.5 text-xs"
+                  />
                   <input
                     value={st.action}
                     onChange={e => {
@@ -333,8 +363,8 @@ const ServiceFormModal = memo(
                       copy[idx] = { ...copy[idx], action: e.target.value };
                       updateField('steps', copy);
                     }}
-                    placeholder="Action"
-                    className="col-span-3 border rounded-lg px-2 py-1.5 text-xs"
+                    placeholder="Action unit"
+                    className="col-span-2 border rounded-lg px-2 py-1.5 text-xs"
                   />
                   <input
                     value={st.fee}
@@ -364,7 +394,7 @@ const ServiceFormModal = memo(
                       updateField('steps', copy);
                     }}
                     placeholder="Person"
-                    className="col-span-3 border rounded-lg px-2 py-1.5 text-xs"
+                    className="col-span-2 border rounded-lg px-2 py-1.5 text-xs"
                   />
                   <button
                     onClick={() => removeStep('steps', idx)}
@@ -377,11 +407,21 @@ const ServiceFormModal = memo(
               ))}
             </SectionWithAdd>
 
-            {/* STEPS FIL */}
+            {/* ======= CLIENT STEPS FIL (5 INPUTS) ======= */}
             <SectionWithAdd label="Client Steps (Filipino) – Hakbang | Bayad | Oras | Tao" onAdd={() => addStep('stepsFil')}>
               {form.stepsFil.map((st, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-2 mb-2 items-center">
                   <span className="col-span-1 text-xs text-gray-500">{idx + 1}</span>
+                  <input
+                    value={st.clientStep}
+                    onChange={e => {
+                      const copy = [...form.stepsFil];
+                      copy[idx] = { ...copy[idx], clientStep: e.target.value };
+                      updateField('stepsFil', copy);
+                    }}
+                    placeholder="Client step"
+                    className="col-span-2 border rounded-lg px-2 py-1.5 text-xs"
+                  />
                   <input
                     value={st.action}
                     onChange={e => {
@@ -389,8 +429,8 @@ const ServiceFormModal = memo(
                       copy[idx] = { ...copy[idx], action: e.target.value };
                       updateField('stepsFil', copy);
                     }}
-                    placeholder="Hakbang"
-                    className="col-span-3 border rounded-lg px-2 py-1.5 text-xs"
+                    placeholder="Action unit"
+                    className="col-span-2 border rounded-lg px-2 py-1.5 text-xs"
                   />
                   <input
                     value={st.fee}
@@ -420,7 +460,7 @@ const ServiceFormModal = memo(
                       updateField('stepsFil', copy);
                     }}
                     placeholder="Tao"
-                    className="col-span-3 border rounded-lg px-2 py-1.5 text-xs"
+                    className="col-span-2 border rounded-lg px-2 py-1.5 text-xs"
                   />
                   <button
                     onClick={() => removeStep('stepsFil', idx)}
@@ -451,7 +491,6 @@ const ServiceFormModal = memo(
       </div>
     );
   },
-  // Custom comparator: re-render only if officeId or service ID changed
   (prev, next) =>
     prev.officeId === next.officeId &&
     prev.service?.id === next.service?.id &&
@@ -482,7 +521,7 @@ const SectionWithAdd = memo(function SectionWithAdd({
   );
 });
 
-// ==================== OFFICE CARD (MEMOIZED) ====================
+// ==================== OFFICE CARD (MEMOIZED) – may VR badge at assignment modal trigger ====================
 const OfficeCard = memo(function OfficeCard({
   office,
   isExpanded,
@@ -491,7 +530,8 @@ const OfficeCard = memo(function OfficeCard({
   onDeleteOffice,
   onOpenServiceModal,
   onDeleteService,
-  navigate,
+  onOpenVRAssignModal,
+  hasVR,
 }: {
   office: OfficeWithServices;
   isExpanded: boolean;
@@ -500,7 +540,8 @@ const OfficeCard = memo(function OfficeCard({
   onDeleteOffice: (id: string) => void;
   onOpenServiceModal: (officeId: string, service?: Service) => void;
   onDeleteService: (officeId: string, serviceId: string) => void;
-  navigate: ReturnType<typeof useNavigate>;
+  onOpenVRAssignModal: (officeId: string) => void;
+  hasVR: boolean;
 }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -529,12 +570,24 @@ const OfficeCard = memo(function OfficeCard({
           >
             <Edit2 size={14} />
           </button>
-          <button
-            onClick={() => navigate(`/admin/vr-editor/${office.id}`)}
-            className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center text-purple-500 hover:bg-purple-100"
-          >
-            <Video size={14} />
-          </button>
+          {/* VR button – opens scene assignment modal */}
+          <div className="relative">
+            <button
+              onClick={() => onOpenVRAssignModal(office.id!)}
+              className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                hasVR
+                  ? 'bg-purple-100 text-purple-600 hover:bg-purple-200'
+                  : 'bg-purple-50 text-purple-500 hover:bg-purple-100'
+              }`}
+            >
+              <Video size={14} />
+            </button>
+            {hasVR && (
+              <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-green-500 rounded-full border-2 border-white flex items-center justify-center">
+                <CheckCircle size={8} className="text-white" />
+              </div>
+            )}
+          </div>
           <button
             onClick={() => onDeleteOffice(office.id!)}
             className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center text-red-400 hover:bg-red-100"
@@ -606,6 +659,151 @@ const OfficeCard = memo(function OfficeCard({
   );
 });
 
+// ==================== VR SCENE ASSIGNMENT MODAL ====================
+function VRAssignModal({
+  officeId,
+  offices,
+  buildingTour,
+  onClose,
+}: {
+  officeId: string;
+  offices: OfficeWithServices[];
+  buildingTour: VRTour;
+  onClose: () => void;
+}) {
+  const office = offices.find(o => o.id === officeId);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+
+  // Pre-select scenes that already have an office hotspot for this office
+  useEffect(() => {
+    const preselected = new Set<string>();
+    buildingTour.scenes.forEach(scene => {
+      const hasOfficeHotspot = scene.hotspots?.some(
+        h => h.type === 'office' && h.targetOfficeId === officeId
+      );
+      if (hasOfficeHotspot) preselected.add(scene.id);
+    });
+    setSelectedIds(preselected);
+  }, [buildingTour, officeId]);
+
+  const toggle = (sceneId: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sceneId)) next.delete(sceneId);
+      else next.add(sceneId);
+      return next;
+    });
+  };
+
+  const handleSave = async () => {
+    if (!buildingTour) return;
+    setSaving(true);
+    const updatedScenes = buildingTour.scenes.map(scene => {
+      // Remove existing office hotspots for this office
+      const otherHotspots = (scene.hotspots || []).filter(
+        h => !(h.type === 'office' && h.targetOfficeId === officeId)
+      );
+      // If selected, add a new office hotspot
+      if (selectedIds.has(scene.id)) {
+        const newHotspot: VRHotspot = {
+          id: `office-${officeId}-${scene.id}`,
+          type: 'office',
+          longitude: 0,
+          latitude: 0,
+          label: office?.name || 'Office',
+          color: office?.iconBg || '#F97316',
+          targetOfficeId: officeId,
+          description: office?.description || '',
+        };
+        otherHotspots.push(newHotspot);
+      }
+      return { ...scene, hotspots: otherHotspots };
+    });
+
+    try {
+      // ----- DIREKTANG UPDATE SA FIRESTORE (kapalit ng updateBuildingTour) -----
+      const tourRef = doc(db, 'vrTours', 'buildingTour');
+      await setDoc(tourRef, { ...buildingTour, scenes: updatedScenes }, { merge: true });
+      onClose();
+    } catch (err) {
+      console.error('Failed to update VR tour', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!office) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl max-h-[80vh] overflow-y-auto">
+        <div className="sticky top-0 bg-white border-b px-5 py-4 flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-semibold">Assign VR Scenes to {office.name}</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Select scenes where this office will appear as a hotspot.
+            </p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="p-5">
+          {buildingTour.scenes.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-8">
+              No 360° scenes yet. Upload scenes first.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {buildingTour.scenes.map(scene => (
+                <label
+                  key={scene.id}
+                  className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+                    selectedIds.has(scene.id)
+                      ? 'bg-purple-50 border-purple-200'
+                      : 'bg-white border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(scene.id)}
+                    onChange={() => toggle(scene.id)}
+                    className="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+                  />
+                  <img
+                    src={scene.url}
+                    alt={scene.label}
+                    className="w-16 h-12 object-cover rounded-lg flex-shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">{scene.label}</p>
+                    <p className="text-xs text-gray-400">{scene.hotspots?.length || 0} hotspots</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="border-t px-5 py-4 flex justify-end gap-3">
+          <button onClick={onClose} className="px-4 py-2 border rounded-lg text-sm">
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="bg-gray-800 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save Assignments'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ==================== MAIN COMPONENT ====================
 export default function AdminOffices() {
   const navigate = useNavigate();
@@ -618,11 +816,23 @@ export default function AdminOffices() {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const [officeName, setOfficeName] = useState('');
-  const [officeFloor, setOfficeFloor] = useState('Ground Floor');
+  const [officeFloorId, setOfficeFloorId] = useState('ground');
   const [officeDesc, setOfficeDesc] = useState('');
   const [officeIconBg, setOfficeIconBg] = useState('#F97316');
 
-  // Service modal state – use object with officeId + optional service
+  // Dynamic floors
+  const [mapFloors, setMapFloors] = useState<MapFloor[]>([]);
+  useEffect(() => {
+    const unsub = useMapSettingsRealtime((settings) => {
+      if (settings.floors?.length) {
+        setMapFloors(settings.floors);
+      } else {
+        setMapFloors([{ id: 'ground', label: 'Ground Floor', url: '', width: 800, height: 600 }]);
+      }
+    });
+    return () => unsub();
+  }, []);
+
   const [serviceModal, setServiceModal] = useState<{ officeId: string; service?: Service } | null>(null);
 
   // Debounced search
@@ -631,6 +841,31 @@ export default function AdminOffices() {
     const timer = setTimeout(() => setDebouncedSearch(search), 300);
     return () => clearTimeout(timer);
   }, [search]);
+
+  // ===== VR DATA =====
+  const [buildingTour, setBuildingTour] = useState<VRTour | null>(null);
+  useEffect(() => {
+    const unsub = useBuildingTourRealtime((data) => setBuildingTour(data));
+    return () => unsub();
+  }, []);
+
+  // Set of office IDs that have at least one VR hotspot
+  const officesWithVR = useMemo(() => {
+    const set = new Set<string>();
+    if (buildingTour?.scenes) {
+      buildingTour.scenes.forEach(scene => {
+        scene.hotspots?.forEach(h => {
+          if (h.type === 'office' && h.targetOfficeId) {
+            set.add(h.targetOfficeId);
+          }
+        });
+      });
+    }
+    return set;
+  }, [buildingTour]);
+
+  // VR assignment modal
+  const [assignVRModalOfficeId, setAssignVRModalOfficeId] = useState<string | null>(null);
 
   const filtered = useMemo(
     () =>
@@ -654,7 +889,7 @@ export default function AdminOffices() {
   const handleEditOffice = useCallback((office: OfficeWithServices) => {
     if (!office.id) return;
     setOfficeName(office.name);
-    setOfficeFloor(office.floor);
+    setOfficeFloorId(office.floorId || 'ground');
     setOfficeDesc(office.description);
     setOfficeIconBg(office.iconBg);
     setEditingOfficeId(office.id);
@@ -685,11 +920,13 @@ export default function AdminOffices() {
   const handleSaveOffice = useCallback(async () => {
     if (!officeName.trim()) return;
     const shortName = officeName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 4);
+    const selectedFloor = mapFloors.find(f => f.id === officeFloorId);
     const data = {
       name: officeName,
       nameFilipino: officeName,
       shortName,
-      floor: officeFloor || 'Ground Floor',
+      floor: selectedFloor?.label || 'Ground Floor',
+      floorId: officeFloorId,
       description: officeDesc,
       descriptionFilipino: officeDesc,
       iconBg: officeIconBg,
@@ -706,13 +943,13 @@ export default function AdminOffices() {
       setShowAddOffice(false);
       setEditingOfficeId(null);
       setOfficeName('');
-      setOfficeFloor('Ground Floor');
+      setOfficeFloorId('ground');
       setOfficeDesc('');
       refetch();
     } catch (err) {
       console.error(err);
     }
-  }, [officeName, officeFloor, officeDesc, officeIconBg, editingOfficeId, refetch]);
+  }, [officeName, officeFloorId, officeDesc, officeIconBg, editingOfficeId, mapFloors, refetch]);
 
   const openServiceModal = useCallback((officeId: string, service?: Service) => {
     setServiceModal({ officeId, service });
@@ -720,7 +957,7 @@ export default function AdminOffices() {
 
   const closeServiceModal = useCallback(() => {
     setServiceModal(null);
-    refetch(); // re-fetch after modal closes (saved)
+    refetch();
   }, [refetch]);
 
   const handleDeleteService = useCallback(
@@ -742,6 +979,14 @@ export default function AdminOffices() {
     [refetch]
   );
 
+  const openVRAssignModal = useCallback((officeId: string) => {
+    setAssignVRModalOfficeId(officeId);
+  }, []);
+
+  const closeVRAssignModal = useCallback(() => {
+    setAssignVRModalOfficeId(null);
+  }, []);
+
   if (loading) return <div className="p-8 text-center text-gray-400">Loading offices…</div>;
 
   return (
@@ -756,7 +1001,7 @@ export default function AdminOffices() {
           onClick={() => {
             setEditingOfficeId(null);
             setOfficeName('');
-            setOfficeFloor('Ground Floor');
+            setOfficeFloorId('ground');
             setOfficeDesc('');
             setShowAddOffice(true);
           }}
@@ -801,7 +1046,8 @@ export default function AdminOffices() {
               onDeleteOffice={handleDeleteOffice}
               onOpenServiceModal={openServiceModal}
               onDeleteService={handleDeleteService}
-              navigate={navigate}
+              onOpenVRAssignModal={openVRAssignModal}
+              hasVR={officesWithVR.has(office.id!)}
             />
           ))}
         </div>
@@ -833,17 +1079,25 @@ export default function AdminOffices() {
                   placeholder="e.g., Mayor's Office"
                 />
               </div>
+
+              {/* Floor dropdown */}
               <div>
-                <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Floor / Location</label>
+                <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">
+                  Floor / Location
+                </label>
                 <select
-                  value={officeFloor}
-                  onChange={e => setOfficeFloor(e.target.value)}
+                  value={officeFloorId}
+                  onChange={e => setOfficeFloorId(e.target.value)}
                   className="w-full border rounded-lg px-3 py-2.5 text-sm bg-white"
                 >
-                  <option value="Ground Floor">Ground Floor</option>
-                  <option value="Second Floor">Second Floor</option>
+                  {mapFloors.map(floor => (
+                    <option key={floor.id} value={floor.id}>
+                      {floor.label}
+                    </option>
+                  ))}
                 </select>
               </div>
+
               <div>
                 <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Description</label>
                 <textarea
@@ -911,14 +1165,24 @@ export default function AdminOffices() {
         </div>
       )}
 
-      {/* SERVICE FORM MODAL (hiwalay, memoized, stable key) */}
+      {/* SERVICE FORM MODAL */}
       {serviceModal && (
         <ServiceFormModal
-          key={serviceModal.service?.id || 'new'}  // prevent re-mounting same service
+          key={serviceModal.service?.id || 'new'}
           officeId={serviceModal.officeId}
           service={serviceModal.service || null}
           onClose={closeServiceModal}
           onSaved={closeServiceModal}
+        />
+      )}
+
+      {/* ===== VR SCENE ASSIGNMENT MODAL ===== */}
+      {assignVRModalOfficeId && buildingTour && (
+        <VRAssignModal
+          officeId={assignVRModalOfficeId}
+          offices={offices}
+          buildingTour={buildingTour}
+          onClose={closeVRAssignModal}
         />
       )}
     </div>

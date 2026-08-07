@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Bell, Search, QrCode, Map, Video, Megaphone, HelpCircle,
   ChevronRight, Briefcase, AlertCircle, Info, Sparkles, X,
 } from 'lucide-react';
-import { Html5Qrcode } from 'html5-qrcode';
 import UserScreenLayout from './UserScreenLayout';
+import QRScannerModal from './QRScannerModal';   // ← gamitin natin ang component
 import { useApp } from '../context/AppContext';
 import { useOffices } from '../../hooks/useOffices';
 import { useAnnouncements } from '../../hooks/useAnnouncements';
@@ -31,56 +31,17 @@ export default function HomeScreen() {
   const { offices } = useOffices();
   const { announcements } = useAnnouncements();
 
-  const qrScannerRef = useRef<Html5Qrcode | null>(null);
-
-  useEffect(() => {
-    return () => {
-      qrScannerRef.current?.stop().catch(() => {});
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!showQR) {
-      qrScannerRef.current?.stop().catch(() => {});
-      return;
-    }
-
-    const scanner = new Html5Qrcode('qr-reader');
-    qrScannerRef.current = scanner;
-
-    scanner
-      .start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        (decodedText) => {
-          scanner.stop().catch(() => {});
-          setShowQR(false);
-          const officeId = decodedText.split('/').pop() || '';
-          if (officeId) {
-            navigate(`/office/${officeId}`);
-          }
-        },
-        () => {}
-      )
-      .catch((err) => {
-        console.error('Failed to start QR scanner:', err);
-        setShowQR(false);
-      });
-
-    return () => {
-      scanner.stop().catch(() => {});
-    };
-  }, [showQR, navigate]);
-
+  // ── mga quick actions ───────────────────
   const quickActions = [
     { icon: QrCode, label: t('QR Scanner', 'QR Scanner'), color: 'bg-orange-50 text-orange-500 border-orange-100', action: () => setShowQR(true) },
     { icon: Briefcase, label: t('E-Services', 'E-Serbisyo'), color: 'bg-blue-50 text-blue-600 border-blue-100', action: () => navigate('/services') },
     { icon: Map, label: t('2D Map', '2D Mapa'), color: 'bg-green-50 text-green-600 border-green-100', action: () => navigate('/map') },
     { icon: Video, label: t('360° Tour', '360° Tour'), color: 'bg-purple-50 text-purple-600 border-purple-100', action: () => navigate('/map?tab=vr') },
-    { icon: Megaphone, label: t('Announcements', 'Anunsyo'), color: 'bg-yellow-50 text-yellow-600 border-yellow-100', action: () => {} },
+    { icon: Megaphone, label: t('Announcements', 'Anunsyo'), color: 'bg-yellow-50 text-yellow-600 border-yellow-100', action: () => navigate('/announcements') },
     { icon: HelpCircle, label: t('Help Center', 'Tulong'), color: 'bg-red-50 text-red-500 border-red-100', action: () => navigate('/help') },
   ];
 
+  // ── search filter ──────────────────────
   const filteredOffices = searchQuery
     ? offices.filter(o =>
         o.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -90,7 +51,7 @@ export default function HomeScreen() {
       )
     : [];
 
-  // --- SMART AI LOGIC (pareho sa HelpCenter) ---
+  // ── AI Assistant Logic (unchanged) ──────
   const findBestServiceMatch = (input: string): { service: any; office: any; score: number } | null => {
     const tokens = input
       .toLowerCase()
@@ -123,7 +84,6 @@ export default function HomeScreen() {
     }
     return bestScore > 0 ? { ...bestMatch, score: bestScore } : null;
   };
-  // --- END SMART AI ---
 
   const handleAIMessage = () => {
     if (!aiInput.trim()) return;
@@ -135,7 +95,6 @@ export default function HomeScreen() {
       const lower = userMsg.toLowerCase();
       let response = '';
 
-      // Gamitin ang smart matching
       const match = findBestServiceMatch(userMsg);
       if (match) {
         const { service: svc, office } = match;
@@ -143,7 +102,6 @@ export default function HomeScreen() {
           ? `**${svc.name}** at **${office.name}** (${office.floor}).\n${svc.info}\nProcessing Time: ${svc.processingTime}\nFee: ${svc.fee}`
           : `**${svc.nameFilipino}** sa **${office.nameFilipino}** (${office.floor}).\n${svc.infoFilipino}\nOras ng Pagproseso: ${svc.processingTime}\nBayad: ${svc.fee}`;
       } else {
-        // Simple office match
         for (const office of offices) {
           const nameEn = office.name.toLowerCase();
           const nameFil = office.nameFilipino.toLowerCase();
@@ -299,7 +257,12 @@ export default function HomeScreen() {
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
               {t('Announcements', 'Mga Anunsyo')}
             </h3>
-            <button className="text-xs text-orange-500 font-medium">{t('View all', 'Tingnan lahat')}</button>
+            <button
+              onClick={() => navigate('/announcements')}
+              className="text-xs text-orange-500 font-medium"
+            >
+              {t('View all', 'Tingnan lahat')}
+            </button>
           </div>
           <div className="space-y-2.5">
             {normalAnnouncements.slice(0, 3).map(ann => (
@@ -381,34 +344,12 @@ export default function HomeScreen() {
         </div>
       )}
 
-      {/* QR Scanner Modal */}
-      {showQR && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-sm p-6 relative">
-            <button
-              onClick={() => setShowQR(false)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-            >
-              <X size={18} />
-            </button>
-            <h3 className="text-lg font-semibold text-gray-800 mb-1">
-              {t('Scan QR Code', 'I-scan ang QR Code')}
-            </h3>
-            <p className="text-sm text-gray-500 mb-4">
-              {t('Point camera at the office QR code', 'Itapat ang camera sa QR code ng opisina')}
-            </p>
-
-            <div id="qr-reader" style={{ width: '100%', borderRadius: '1rem', overflow: 'hidden' }} />
-
-            <button
-              onClick={() => setShowQR(false)}
-              className="mt-4 w-full border border-gray-200 text-gray-600 py-3 rounded-xl text-sm font-medium hover:bg-gray-50"
-            >
-              {t('Cancel', 'Kanselahin')}
-            </button>
-          </div>
-        </div>
-      )}
+      {/* ───── QR Scanner Modal (gamitin ang safe component) ───── */}
+      <QRScannerModal
+        open={showQR}
+        onClose={() => setShowQR(false)}
+        // optional: kung may extra logic ka pagkatapos ma-scan, ilagay dito
+      />
 
       {/* AI Assistant Modal */}
       {showAI && (

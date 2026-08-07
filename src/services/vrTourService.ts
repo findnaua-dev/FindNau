@@ -11,7 +11,9 @@ export interface VRHotspot {
   targetSceneId?: string;
   targetOfficeId?: string;
   color?: string;
-  shape?: string;
+  shape?: 'circle' | 'square' | 'diamond' | 'hexagon' | 'rounded' | 'arrow';
+  size?: number;           // default 1
+  direction?: number;      // degrees, only for 'arrow' shape
 }
 
 export interface VRScene {
