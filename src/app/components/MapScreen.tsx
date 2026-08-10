@@ -19,6 +19,7 @@ import { useOffices } from '../../hooks/useOffices';
 import { useMapSettingsRealtime, MapFloor } from '../../services/mapService';
 import { useBuildingTourRealtime, VRTour, VRHotspot } from '../../services/vrTourService';
 import EquirectangularViewer, { EquirectangularViewerHandle } from './EquirectangularViewer';
+import { useVRGaze } from '../../hooks/useVRGaze';
 
 interface ExtendedVRHotspot extends VRHotspot {
   x?: number;
@@ -141,6 +142,16 @@ export default function MapScreen() {
 
   const handleReticleHit = (hotspot: any | null) => setReticleHit(hotspot);
 
+    useVRGaze({
+    viewerRef,
+    vrMode,
+    hotspots: extendedHotspots,
+    onReticleHit: handleReticleHit,
+    onHotspotGaze: (hotspot) => {
+      handleViewerHotspotClick(hotspot);
+    },
+      gazeTimeout: 3000,
+    });
   const handleVRButtonClick = async () => {
     if (vrMode) {
       await viewerRef.current?.exitVR();

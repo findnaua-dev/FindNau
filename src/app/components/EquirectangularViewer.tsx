@@ -14,7 +14,7 @@ interface HotspotData {
   targetOfficeId?: string;
   shape?: 'circle' | 'square' | 'diamond' | 'hexagon' | 'rounded' | 'arrow';
   size?: number;
-  direction?: number; // only used for 'arrow' shape
+  direction?: number;
 }
 
 interface ViewerProps {
@@ -25,7 +25,7 @@ interface ViewerProps {
   onClickScene?: (lon: number, lat: number) => void;
   onDropScene?: (lon: number, lat: number, targetSceneId: string) => void;
   onHotspotMove?: (hotspotId: string, newLon: number, newLat: number) => void;
-  onHotspotMoveEnd?: (hotspotId: string, newLon: number, newLat: number) => void; // fired on pointer up
+  onHotspotMoveEnd?: (hotspotId: string, newLon: number, newLat: number) => void;
   onReticleHit?: (hotspot: HotspotData | null) => void;
   enableClickToPlace?: boolean;
   enableReticle?: boolean;
@@ -92,18 +92,20 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
     const sphereRef = useRef<THREE.Mesh | null>(null);
     const controlsRef = useRef<OrbitControls | null>(null);
     const hotspotsGroupRef = useRef<THREE.Group>(new THREE.Group());
-    const animationIdRef = useRef<number>(0);
+
+    // ─── NEW: ref to safely read VR state inside the animation loop ───
+    const vrActiveRef = useRef(false);
+    const vrSessionRef = useRef<XRSession | null>(null);
 
     const draggedSpriteRef = useRef<THREE.Sprite | null>(null);
     const pointerDownPos = useRef<{ x: number; y: number } | null>(null);
     const dragMoved = useRef(false);
-    const isDraggingOverlayRef = useRef(false); // to disable orbit during hotspot drag
-    const lastDragPos = useRef<{ lon: number; lat: number } | null>(null); // to fire moveEnd with final position
+    const isDraggingOverlayRef = useRef(false);
+    const lastDragPos = useRef<{ lon: number; lat: number } | null>(null);
 
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState(false);
     const [vrActive, setVrActive] = useState(false);
-    const vrSessionRef = useRef<XRSession | null>(null);
     const [transitionActive, setTransitionActive] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -119,6 +121,11 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       document.addEventListener('fullscreenchange', handleFullscreenChange);
       return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, []);
+
+    // Sync vrActive state to ref so the animation loop always has the latest value
+    useEffect(() => {
+      vrActiveRef.current = vrActive;
+    }, [vrActive]);
 
     useImperativeHandle(ref, () => ({
       async enterVR() {
@@ -136,6 +143,8 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
             session.addEventListener('end', () => {
               vrSessionRef.current = null;
               setVrActive(false);
+              // Re-enable controls after VR ends (if they were disabled)
+              if (controlsRef.current) controlsRef.current.enabled = true;
             });
           }
         } catch (err) {
@@ -146,9 +155,13 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         await vrSessionRef.current?.end();
       },
       isVRActive: () => vrActive,
+      getCamera: () => cameraRef.current,
+      getRenderer: () => rendererRef.current,
+      getScene: () => sceneRef.current,
+      getControls: () => controlsRef.current,
     }));
 
-    // Setup scene, camera, renderer
+    // ─── SETUP SCENE, CAMERA, RENDERER ───────────────────────────────
     useEffect(() => {
       if (!mountRef.current) return;
       const width = mountRef.current.clientWidth;
@@ -188,16 +201,21 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       cameraRef.current = camera;
       rendererRef.current = renderer;
 
+      // ─── CORRECTED ANIMATION LOOP (WebXR compatible) ───────────────
       const animate = () => {
-        animationIdRef.current = requestAnimationFrame(animate);
-        if (!isDraggingOverlayRef.current) {
+        // Only update OrbitControls when NOT in VR and NOT dragging a hotspot
+        if (!vrActiveRef.current && !isDraggingOverlayRef.current) {
           controls.update();
         }
         renderer.render(scene, camera);
-        if (enableReticle) detectReticle();
+        // Reticle detection only in non‑VR mode
+        if (enableReticle && !vrActiveRef.current) detectReticle();
       };
-      animate();
 
+      // Use setAnimationLoop instead of requestAnimationFrame!
+      renderer.setAnimationLoop(animate);
+
+      // ─── RESIZE HANDLER ─────────────────────────────────────────────
       const handleResize = () => {
         if (!mountRef.current || !cameraRef.current || !rendererRef.current) return;
         const w = mountRef.current.clientWidth;
@@ -208,15 +226,18 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       };
       window.addEventListener('resize', handleResize);
 
+      // ─── CLEANUP ────────────────────────────────────────────────────
       return () => {
-        cancelAnimationFrame(animationIdRef.current);
+        renderer.setAnimationLoop(null);   // stop the loop
         window.removeEventListener('resize', handleResize);
         renderer.dispose();
-        if (mountRef.current) mountRef.current.removeChild(renderer.domElement);
+        if (mountRef.current && renderer.domElement.parentNode === mountRef.current) {
+          mountRef.current.removeChild(renderer.domElement);
+        }
       };
-    }, []);
+    }, [enableReticle]); // enableReticle is used inside animate, so re‑create loop if it changes
 
-    // Texture loading
+    // ─── TEXTURE LOADING ─────────────────────────────────────────────
     useEffect(() => {
       if (!sphereRef.current) return;
       const loader = new THREE.TextureLoader();
@@ -266,10 +287,9 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         });
     }, [sceneUrl, brightness]);
 
-    // Update hotspot sprites – with directional arrows
+    // ─── HOTSPOT SPRITES ────────────────────────────────────────────
     useEffect(() => {
       const group = hotspotsGroupRef.current;
-      // Clear existing sprites
       while (group.children.length) {
         const child = group.children[0];
         if (child instanceof THREE.Sprite) {
@@ -279,7 +299,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         group.remove(child);
       }
 
-      // Create new sprites
       hotspots.forEach((h) => {
         const pos = latLonToPosition(h.latitude, h.longitude, 9.8);
         const size = h.size || 1;
@@ -292,7 +311,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         const cx = canvas.width / 2;
         const cy = canvas.height / 2;
 
-        // Apply rotation only for arrow shape
         const direction = h.direction || 0;
         if (h.shape === 'arrow' && direction !== 0) {
           ctx.save();
@@ -301,7 +319,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
           ctx.translate(-cx, -cy);
         }
 
-        // Base circle background
         ctx.beginPath();
         ctx.arc(cx, cy, (baseSize / 2 - 2) * size, 0, 2 * Math.PI);
         ctx.fillStyle = h.color || '#F97316';
@@ -357,7 +374,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
             ctx.closePath();
             ctx.fill();
             break;
-          default: // circle
+          default:
             ctx.beginPath();
             ctx.arc(cx, cy, iconSize, 0, 2 * Math.PI);
             ctx.fill();
@@ -375,9 +392,9 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         sprite.userData = { hotspot: h };
         group.add(sprite);
       });
-    }, [hotspots]); // re-run only when hotspots array changes
+    }, [hotspots]);
 
-    // Reticle detection
+    // ─── RETICLE DETECTION (helper) ────────────────────────────────
     const detectReticle = () => {
       if (!cameraRef.current || !onReticleHit) return;
       const raycaster = new THREE.Raycaster();
@@ -390,7 +407,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       }
     };
 
-    // Pointer events + drop handler
+    // ─── POINTER / DRAG / DROP EVENTS ──────────────────────────────
     useEffect(() => {
       const container = mountRef.current!;
       if (!container) return;
@@ -427,8 +444,8 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
           const hits = raycaster.intersectObjects(hotspotsGroupRef.current.children);
           if (hits.length > 0) {
             draggedSpriteRef.current = hits[0].object as THREE.Sprite;
-            isDraggingOverlayRef.current = true; // disable orbit
-            lastDragPos.current = { lon: 0, lat: 0 }; // will be set on first move
+            isDraggingOverlayRef.current = true;
+            lastDragPos.current = { lon: 0, lat: 0 };
             e.preventDefault();
             return;
           }
@@ -471,7 +488,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
 
       const onPointerUp = (e: MouseEvent | TouchEvent) => {
         if (draggedSpriteRef.current) {
-          // Fire moveEnd with the final position
           if (onHotspotMoveEnd && lastDragPos.current) {
             onHotspotMoveEnd(
               draggedSpriteRef.current.userData.hotspot.id,
@@ -499,7 +515,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
           const raycaster = new THREE.Raycaster();
           raycaster.setFromCamera(mouse, cameraRef.current!);
 
-          // Check hotspot clicks
           const spriteHits = raycaster.intersectObjects(hotspotsGroupRef.current.children);
           if (spriteHits.length > 0) {
             onHotspotClick?.((spriteHits[0].object as THREE.Sprite).userData.hotspot);
@@ -507,7 +522,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
             return;
           }
 
-          // Scene click (admin only)
           if (enableClickToPlace && onClickScene && sphereRef.current) {
             const sphereHits = raycaster.intersectObject(sphereRef.current);
             if (sphereHits.length > 0) {
@@ -522,7 +536,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         dragMoved.current = false;
       };
 
-      // Drop from filmstrip – attached to container to avoid overlay interference
       const handleDragOver = (e: DragEvent) => {
         e.preventDefault();
         if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
@@ -549,7 +562,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         }
       };
 
-      // Attach drop to the outer container
       container.addEventListener('dragover', handleDragOver);
       container.addEventListener('drop', handleDrop);
       canvas.addEventListener('mousedown', onPointerDown);
@@ -571,7 +583,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       };
     }, [isAdmin, onHotspotClick, onClickScene, enableClickToPlace, onHotspotMove, onHotspotMoveEnd]);
 
-    // Gaze timer
+    // ─── GAZE TIMER ────────────────────────────────────────────────
     useEffect(() => {
       if (!showReticle || !onHotspotGaze) return;
       let frame: number;
@@ -631,9 +643,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
             </div>
           </div>
         )}
-        {/* Fade overlay */}
         <div className="absolute inset-0 bg-black z-10 pointer-events-none transition-opacity duration-300" style={{ opacity: transitionActive ? 0.3 : 0 }} />
-        {/* Reticle UI */}
         {showReticleUI && (
           <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center">
             <svg width="32" height="32" viewBox="0 0 32 32">
@@ -645,7 +655,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
             </svg>
           </div>
         )}
-        {/* Admin nav arrows */}
         {isAdmin && onSceneChange && !isLoading && !loadError && (
           <div className="absolute bottom-4 left-4 right-4 flex justify-center z-10 gap-2">
             <button onClick={() => onSceneChange(-1)} className="bg-black/60 text-white px-3 py-1.5 rounded-full text-sm hover:bg-black/80">Prev</button>
@@ -653,7 +662,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
             <button onClick={() => onSceneChange(1)} className="bg-black/60 text-white px-3 py-1.5 rounded-full text-sm hover:bg-black/80">Next</button>
           </div>
         )}
-        {/* Fullscreen toggle button (always visible in user mode) */}
         {!isAdmin && !isLoading && !loadError && (
           <div className="absolute top-4 right-4 z-30 flex flex-col gap-2">
             <button
