@@ -3,17 +3,17 @@ import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 
 export interface VRHotspot {
   id?: string;
-  longitude: number;   // -180 to 180
-  latitude: number;    // -90 to 90
-  type: 'navigation' | 'office' | 'info';
+  longitude: number;
+  latitude: number;
+  type: 'navigation' | 'office' | 'info' | 'entrance'; // ← DAGDAG
   label: string;
   description?: string;
   targetSceneId?: string;
   targetOfficeId?: string;
   color?: string;
   shape?: 'circle' | 'square' | 'diamond' | 'hexagon' | 'rounded' | 'arrow';
-  size?: number;           // default 1
-  direction?: number;      // degrees, only for 'arrow' shape
+  size?: number;
+  direction?: number;
 }
 
 export interface VRScene {
@@ -21,7 +21,10 @@ export interface VRScene {
   url: string;
   label: string;
   description?: string;
+  floorId?: string;
   hotspots: VRHotspot[];
+  // Office-specific paths
+  officePaths?: Record<string, { points: { lon: number; lat: number }[] }>;
 }
 
 export interface VRTour {

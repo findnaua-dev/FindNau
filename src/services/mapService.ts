@@ -1,12 +1,24 @@
 import { doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 
+export interface MapPoint {
+  x: number;
+  y: number;
+}
+
+export interface MapPath {
+  officeId: string;
+  points: MapPoint[];
+}
+
 export interface MapFloor {
   id: string;
   label: string;
   url: string;
   width: number;
   height: number;
+  entrance?: MapPoint;
+  paths?: MapPath[];
 }
 
 export interface MapSettings {
@@ -20,8 +32,8 @@ export async function getMapSettings(): Promise<MapSettings> {
   if (snap.exists()) return snap.data() as MapSettings;
   return {
     floors: [
-      { id: 'ground', label: 'Ground Floor', url: '', width: 800, height: 600 },
-      { id: 'second', label: '2nd Floor', url: '', width: 800, height: 600 },
+      { id: 'ground', label: 'Ground Floor', url: '', width: 800, height: 600, entrance: undefined, paths: [] },
+      { id: 'second', label: '2nd Floor', url: '', width: 800, height: 600, entrance: undefined, paths: [] },
     ],
   };
 }
@@ -41,8 +53,8 @@ export function useMapSettingsRealtime(callback: (settings: MapSettings) => void
     } else {
       callback({
         floors: [
-          { id: 'ground', label: 'Ground Floor', url: '', width: 800, height: 600 },
-          { id: 'second', label: '2nd Floor', url: '', width: 800, height: 600 },
+          { id: 'ground', label: 'Ground Floor', url: '', width: 800, height: 600, entrance: undefined, paths: [] },
+          { id: 'second', label: '2nd Floor', url: '', width: 800, height: 600, entrance: undefined, paths: [] },
         ],
       });
     }

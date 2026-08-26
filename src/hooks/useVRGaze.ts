@@ -27,13 +27,15 @@ interface VRGazeOptions {
   dwellTolerance?: number;
 }
 
+// ===== IMPORTANT: This formula must match the one in EquirectangularViewer =====
+// The sphere is flipped with scale.x = -1, so we use the exact same mapping.
 const latLonToPosition = (lat: number, lon: number, radius = 9.8): THREE.Vector3 => {
   const phi = THREE.MathUtils.degToRad(90 - lat);
   const theta = THREE.MathUtils.degToRad(lon);
   return new THREE.Vector3(
-    -radius * Math.sin(phi) * Math.cos(theta),
-    radius * Math.cos(phi),
-    radius * Math.sin(phi) * Math.sin(theta)
+    radius * Math.sin(theta) * Math.sin(phi), // x
+    radius * Math.cos(phi),                  // y
+    -radius * Math.cos(theta) * Math.sin(phi) // z
   );
 };
 
@@ -226,18 +228,13 @@ export function useVRGaze({
 
   useEffect(() => {
     if (!vrMode) {
+      // Reset state when leaving VR
       if (frameIdRef.current) cancelAnimationFrame(frameIdRef.current);
-      const scene = viewerRef.current?.getScene();
-      if (reticleRef.current && scene) scene.remove(reticleRef.current);
-      if (ringRef.current && scene) scene.remove(ringRef.current);
-      reticleRef.current?.material?.dispose();
-      ringRef.current?.material?.dispose();
-      reticleRef.current = null;
-      ringRef.current = null;
       processingRef.current = false;
       setProcessing(false);
       currentHotspotRef.current = null;
       dwellStartRef.current = 0;
+      initialHitAngleRef.current = 0;
       return;
     }
 
@@ -246,8 +243,11 @@ export function useVRGaze({
     const controls = viewerRef.current?.getControls();
 
     if (!camera || !scene) return;
+
+    // Disable OrbitControls while in VR
     if (controls) controls.enabled = false;
 
+    // Create reticle dot
     const dotTex = createDotTexture(14);
     const dotMat = new THREE.SpriteMaterial({
       map: dotTex,
@@ -261,6 +261,7 @@ export function useVRGaze({
     scene.add(reticle);
     reticleRef.current = reticle;
 
+    // Create progress ring
     const ringTex = createRingTexture(0);
     const ringMat = new THREE.SpriteMaterial({
       map: ringTex,
@@ -316,6 +317,7 @@ export function useVRGaze({
         }
       }
 
+      // Fallback: angle-based detection for sprites that may not be raycasted correctly
       if (!hitHotspot && currentHotspots.length > 0) {
         const dirToHotspot = new THREE.Vector3();
         let closestAngle = Infinity;
@@ -340,6 +342,7 @@ export function useVRGaze({
         }
       }
 
+      // Determine reticle position
       let reticlePos: THREE.Vector3;
       if (hitHotspot) {
         const pos = getHotspotPosition(hitHotspot);
@@ -426,7 +429,26 @@ export function useVRGaze({
 
     frameIdRef.current = requestAnimationFrame(checkGaze);
 
-    return () => {};
+    // ===== PROPER CLEANUP =====
+    return () => {
+      cancelAnimationFrame(frameIdRef.current);
+      if (reticleRef.current && scene) scene.remove(reticleRef.current);
+      if (ringRef.current && scene) scene.remove(ringRef.current);
+      reticleRef.current?.material?.dispose();
+      ringRef.current?.material?.dispose();
+      reticleRef.current = null;
+      ringRef.current = null;
+      if (controls) controls.enabled = true;
+      processingRef.current = false;
+      setProcessing(false);
+      currentHotspotRef.current = null;
+      dwellStartRef.current = 0;
+      initialHitAngleRef.current = 0;
+      if (processingTimerRef.current) {
+        clearTimeout(processingTimerRef.current);
+        processingTimerRef.current = null;
+      }
+    };
   }, [vrMode, viewerRef, createDotTexture, createRingTexture, updateRing, getHotspotPosition, completeProcessing, scaleByDistance]);
 
   return {

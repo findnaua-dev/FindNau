@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo, memo } from 'react';
+import { useState, useMemo } from 'react';
 import {
-  Plus, Search, Edit2, Trash2, Save, X, AlertCircle, ChevronDown, ChevronUp,
+  Plus, Search, Edit2, Trash2, Save, X, AlertCircle, ChevronDown, ChevronUp, Loader2
 } from 'lucide-react';
 import { useAnnouncements } from '../../../hooks/useAnnouncements';
 import {
@@ -10,6 +10,7 @@ import {
   Announcement,
 } from '../../../services/announcementService';
 import { addNotification } from '../../../services/notificationService';
+import ImageUpload from '../ui/ImageUpload'; // <-- import ang Cloudinary ImageUpload
 
 const emptyAnnouncement: Announcement = {
   title: '',
@@ -19,6 +20,7 @@ const emptyAnnouncement: Announcement = {
   category: 'Announcement',
   urgent: false,
   date: new Date().toLocaleDateString(),
+  imageUrl: '', // <-- idagdag
 };
 
 const categoryOptions = ['Notice', 'Health', 'Announcement', 'Business', 'Tax'];
@@ -39,10 +41,12 @@ export default function AdminAnnouncements() {
   const [form, setForm] = useState<Announcement>({ ...emptyAnnouncement });
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
     if (!form.title.trim() || !form.content.trim()) return;
     try {
+      setSaving(true);
       if (editing?.id) {
         await updateAnnouncement(editing.id, form);
         addNotification({
@@ -67,6 +71,8 @@ export default function AdminAnnouncements() {
       setForm({ ...emptyAnnouncement });
     } catch (err) {
       console.error(err);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -91,6 +97,7 @@ export default function AdminAnnouncements() {
 
   return (
     <div className="space-y-5 max-w-5xl" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold text-gray-800">Announcements</h2>
@@ -108,6 +115,7 @@ export default function AdminAnnouncements() {
         </button>
       </div>
 
+      {/* Search */}
       <div className="relative max-w-sm">
         <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
         <input
@@ -118,6 +126,7 @@ export default function AdminAnnouncements() {
         />
       </div>
 
+      {/* List */}
       <div className="space-y-3">
         {filtered.map(ann => (
           <div key={ann.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
@@ -149,6 +158,13 @@ export default function AdminAnnouncements() {
                   <div className="mt-3 pl-8 border-l-2 border-orange-200 space-y-2">
                     <p className="text-sm text-gray-600"><strong>EN:</strong> {ann.content}</p>
                     <p className="text-sm text-gray-600"><strong>FIL:</strong> {ann.contentFilipino}</p>
+                    {ann.imageUrl && (
+                      <img
+                        src={ann.imageUrl}
+                        alt="Announcement"
+                        className="mt-2 w-32 h-32 object-cover rounded-lg border border-gray-200"
+                      />
+                    )}
                     <p className="text-xs text-gray-400">Published: {ann.date}</p>
                   </div>
                 )}
@@ -271,12 +287,26 @@ export default function AdminAnnouncements() {
                   placeholder="MM/DD/YYYY"
                 />
               </div>
+
+              {/* Image Upload – Cloudinary */}
+              <div>
+                <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Image</label>
+                <ImageUpload
+                  onUpload={(url) => setForm({ ...form, imageUrl: url })}
+                  currentImage={form.imageUrl}
+                  label="Announcement Image"
+                  folder="announcements"
+                  maxFileSize={5}
+                />
+              </div>
+
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={handleSave}
-                  className="flex-1 bg-orange-500 text-white py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 hover:bg-orange-600"
+                  disabled={saving}
+                  className="flex-1 bg-orange-500 text-white py-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 hover:bg-orange-600 disabled:opacity-50"
                 >
-                  <Save size={16} />
+                  {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
                   {editing ? 'Update' : 'Publish'}
                 </button>
                 <button

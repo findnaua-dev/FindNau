@@ -1,34 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  X,
-  ChevronLeft,
-  Save,
-  CheckCircle,
-  AlertCircle,
-  ChevronDown,
-  ChevronUp,
-  Info,
-  Navigation,
-  Building2,
-  Circle,
-  Square,
-  Diamond,
-  Hexagon,
-  ArrowUp,
-  Palette,
-  Trash2,
-  Plus,
+  X, ChevronLeft, Save, CheckCircle, AlertCircle, ChevronDown, ChevronUp,
+  Info, Navigation, Building2, Circle, Square, Diamond, Hexagon, ArrowUp,
+  Palette, Trash2, Plus, DoorOpen,
 } from 'lucide-react';
-import { VRTour, VRHotspot } from '../../../services/vrTourService';
+import { VRTour, VRHotspot, VRScene } from '../../../services/vrTourService';
+import { useMapSettingsRealtime, MapFloor } from '../../../services/mapService';
 import EquirectangularViewer from '../EquirectangularViewer';
 import { SHAPES, HOTSPOT_COLORS, ARROW_DIRECTIONS } from './mapConstants';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import ScenePathEditor from './ScenePathEditor';
 
-interface SceneWithHotspots {
-  id: string;
-  url: string;
-  label: string;
-  description?: string;
+interface SceneWithHotspots extends VRScene {
   hotspots: VRHotspot[];
 }
 
@@ -57,38 +40,70 @@ export default function VREditorFullScreen({
   offices,
   onDropScene,
 }: VREditorFullScreenProps) {
-  const [localSelectedSceneId, setLocalSelectedSceneId] = useState<string | null>(
-    propSelectedSceneId
-  );
+  const [localSelectedSceneId, setLocalSelectedSceneId] = useState<string | null>(propSelectedSceneId);
   const [brightness, setBrightness] = useState(1);
-  const [newHotspotTemp, setNewHotspotTemp] = useState<{
-    lon: number;
-    lat: number;
-  } | null>(null);
+  const [newHotspotTemp, setNewHotspotTemp] = useState<{ lon: number; lat: number } | null>(null);
   const [selectedHotspotId, setSelectedHotspotId] = useState<string | null>(null);
   const [hotspotLabel, setHotspotLabel] = useState('');
-  const [hotspotType, setHotspotType] = useState<'navigation' | 'office' | 'info'>('info');
+  const [hotspotType, setHotspotType] = useState<'navigation' | 'office' | 'info' | 'entrance'>('info');
   const [hotspotColor, setHotspotColor] = useState('#F97316');
-  const [hotspotShape, setHotspotShape] = useState<
-    'circle' | 'square' | 'diamond' | 'hexagon' | 'rounded' | 'arrow'
-  >('circle');
+  const [hotspotShape, setHotspotShape] = useState<'circle' | 'square' | 'diamond' | 'hexagon' | 'rounded' | 'arrow'>('circle');
   const [hotspotSize, setHotspotSize] = useState(1);
   const [hotspotDirection, setHotspotDirection] = useState(0);
-  const [hotspotTargetScene, setHotspotTargetScene] = useState<string>('');
-  const [hotspotTargetOffice, setHotspotTargetOffice] = useState<string>('');
+  const [hotspotTargetScene, setHotspotTargetScene] = useState('');
+  const [hotspotTargetOffice, setHotspotTargetOffice] = useState('');
   const [dragSceneId, setDragSceneId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [hotspotListCollapsed, setHotspotListCollapsed] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [hotspotToDelete, setHotspotToDelete] = useState<string | null>(null);
 
+  // Path editing state – inilipat dito para ma-access ng parent
+  const [editPathMode, setEditPathMode] = useState(false);
+  const [pathOfficeId, setPathOfficeId] = useState<string>('');
+  const [pathPoints, setPathPoints] = useState<{ lon: number; lat: number }[]>([]);
+
+  // Floors from map settings
+  const [floors, setFloors] = useState<MapFloor[]>([]);
+
   const scenes = (tour as TourWithScenes)?.scenes || [];
   const currentScene = scenes.find((s) => s.id === localSelectedSceneId);
   const currentIndex = scenes.findIndex((s) => s.id === localSelectedSceneId);
 
   const scenesRef = useRef(scenes);
-  useEffect(() => { scenesRef.current = scenes; }, [scenes]);
+  useEffect(() => {
+    scenesRef.current = scenes;
+  }, [scenes]);
+
+  // Sync selected scene
+  useEffect(() => {
+    setLocalSelectedSceneId(propSelectedSceneId);
+  }, [propSelectedSceneId]);
+
+  // Fetch floors
+  useEffect(() => {
+    const unsub = useMapSettingsRealtime((settings) => {
+      if (settings.floors?.length) {
+        setFloors(settings.floors);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Reset/load path when scene or office changes
+  useEffect(() => {
+    setSelectedHotspotId(null);
+    setNewHotspotTemp(null);
+    setEditPathMode(false);
+    const scene = scenes.find((s) => s.id === localSelectedSceneId);
+    if (scene && pathOfficeId && scene.officePaths?.[pathOfficeId]) {
+      setPathPoints([...scene.officePaths[pathOfficeId].points]);
+    } else {
+      setPathPoints([]);
+    }
+  }, [localSelectedSceneId, pathOfficeId, scenes]);
 
   const syncFormFromHotspot = useCallback((hotspot: VRHotspot | undefined) => {
     if (!hotspot) {
@@ -105,16 +120,6 @@ export default function VREditorFullScreen({
     setHotspotTargetOffice(hotspot.targetOfficeId || '');
   }, []);
 
-  useEffect(() => {
-    setLocalSelectedSceneId(propSelectedSceneId);
-  }, [propSelectedSceneId]);
-
-  useEffect(() => {
-    const handleWindowDragEnd = () => setIsDragging(false);
-    window.addEventListener('dragend', handleWindowDragEnd);
-    return () => window.removeEventListener('dragend', handleWindowDragEnd);
-  }, []);
-
   const updateTourLocal = useCallback(
     (updatedScenes: SceneWithHotspots[]) => {
       onTourUpdate({
@@ -126,11 +131,6 @@ export default function VREditorFullScreen({
     [tour, onTourUpdate]
   );
 
-  useEffect(() => {
-    setSelectedHotspotId(null);
-    setNewHotspotTemp(null);
-  }, [localSelectedSceneId]);
-
   const goToScene = (index: number) => {
     if (index >= 0 && index < scenes.length) {
       const newId = scenes[index].id;
@@ -140,9 +140,13 @@ export default function VREditorFullScreen({
   };
 
   const handleSphereClick = (lon: number, lat: number) => {
-    setNewHotspotTemp({ lon, lat });
-    setSelectedHotspotId(null);
-    resetHotspotForm();
+    if (editPathMode && pathOfficeId) {
+      setPathPoints((prev) => [...prev, { lon, lat }]);
+    } else {
+      setNewHotspotTemp({ lon, lat });
+      setSelectedHotspotId(null);
+      resetHotspotForm();
+    }
   };
 
   const resetHotspotForm = () => {
@@ -167,7 +171,6 @@ export default function VREditorFullScreen({
       color: hotspotColor,
       shape: hotspotShape,
       size: hotspotSize,
-      // Only include direction if shape is arrow
       ...(hotspotShape === 'arrow' ? { direction: hotspotDirection } : {}),
       targetSceneId: hotspotType === 'navigation' ? hotspotTargetScene || undefined : undefined,
       targetOfficeId: hotspotType === 'office' ? hotspotTargetOffice || undefined : undefined,
@@ -196,12 +199,10 @@ export default function VREditorFullScreen({
         color: '#3B82F6',
         shape: 'arrow',
         size: 1.2,
-        direction: 0, // arrow shape, so direction is valid
+        direction: 0,
       };
       const updated = scenesRef.current.map((s) =>
-        s.id === localSelectedSceneId
-          ? { ...s, hotspots: [...s.hotspots, newHotspot] }
-          : s
+        s.id === localSelectedSceneId ? { ...s, hotspots: [...s.hotspots, newHotspot] } : s
       );
       updateTourLocal(updated);
       setSelectedHotspotId(newHotspot.id);
@@ -235,7 +236,42 @@ export default function VREditorFullScreen({
     [handleHotspotMove]
   );
 
+  // IMPORTANT: Dito natin ilalagay ang continue feature
   const handleHotspotClick = (hotspot: any) => {
+    if (editPathMode) {
+      // Kapag nag-edit ng path at na-click ang navigation hotspot na may targetSceneId
+      if (hotspot.type === 'navigation' && hotspot.targetSceneId) {
+        // I-save muna ang current path kung may laman at may ≥2 points
+        if (pathOfficeId && currentScene && pathPoints.length >= 2) {
+          const updated = scenesRef.current.map((s) => {
+            if (s.id !== currentScene.id) return s;
+            const officePaths = { ...s.officePaths };
+            officePaths[pathOfficeId] = { points: pathPoints };
+            return { ...s, officePaths };
+          });
+          updateTourLocal(updated);
+        }
+        // Lumipat sa target scene
+        const targetSceneId = hotspot.targetSceneId;
+        setLocalSelectedSceneId(targetSceneId);
+        propOnSelectScene(targetSceneId);
+        // Sa bagong scene, magsimula sa entrance hotspot kung mayroon
+        const targetScene = scenesRef.current.find((s) => s.id === targetSceneId);
+        if (targetScene) {
+          const entrance = targetScene.hotspots.find((h) => h.type === 'entrance');
+          if (entrance) {
+            setPathPoints([{ lon: entrance.longitude, lat: entrance.latitude }]);
+          } else {
+            setPathPoints([]);
+          }
+        }
+        // Panatilihing naka-edit mode at pareho ang office
+        setEditPathMode(true);
+      }
+      return;
+    }
+
+    // Normal mode: i-edit ang hotspot details
     setNewHotspotTemp(null);
     const h = currentScene?.hotspots.find((h) => h.id === hotspot.id);
     setSelectedHotspotId(hotspot.id);
@@ -275,6 +311,7 @@ export default function VREditorFullScreen({
     setDeleteConfirmOpen(false);
   };
 
+  // ==================== DRAG & DROP (IMPROVED) ====================
   const handleDragStart = (e: React.DragEvent, sceneId: string) => {
     setDragSceneId(sceneId);
     setIsDragging(true);
@@ -282,25 +319,38 @@ export default function VREditorFullScreen({
     e.dataTransfer.setData('text/plain', sceneId);
   };
 
-  const handleDragOverFilmstrip = (e: React.DragEvent) => e.preventDefault();
+  const handleDragOverFilmstrip = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
 
   const handleDropFilmstrip = (e: React.DragEvent, targetId: string) => {
     e.preventDefault();
-    if (!dragSceneId || dragSceneId === targetId) return;
-    const idxDrag = scenesRef.current.findIndex((s) => s.id === dragSceneId);
-    const idxTarget = scenesRef.current.findIndex((s) => s.id === targetId);
-    if (idxDrag < 0 || idxTarget < 0) return;
+    const sourceId = dragSceneId;
+    if (!sourceId || sourceId === targetId) return;
+    const sourceIdx = scenesRef.current.findIndex((s) => s.id === sourceId);
+    const targetIdx = scenesRef.current.findIndex((s) => s.id === targetId);
+    if (sourceIdx < 0 || targetIdx < 0) return;
     const updated = [...scenesRef.current];
-    const [moved] = updated.splice(idxDrag, 1);
-    updated.splice(idxTarget, 0, moved);
+    const [moved] = updated.splice(sourceIdx, 1);
+    updated.splice(targetIdx, 0, moved);
     updateTourLocal(updated);
     setDragSceneId(null);
     setIsDragging(false);
+    setDragOverId(null);
   };
 
   const handleDragEnd = () => {
-    setTimeout(() => setIsDragging(false), 0);
     setDragSceneId(null);
+    setIsDragging(false);
+    setDragOverId(null);
+  };
+
+  const handleDragEnterItem = (sceneId: string) => {
+    setDragOverId(sceneId);
+  };
+
+  const handleDragLeaveItem = () => {
+    setDragOverId(null);
   };
 
   const handleSave = async () => {
@@ -316,9 +366,7 @@ export default function VREditorFullScreen({
   };
 
   const selectedHotspot = currentScene?.hotspots.find((h) => h.id === selectedHotspotId);
-  const overlayStyle = isDragging
-    ? ({ pointerEvents: 'none' } as React.CSSProperties)
-    : {};
+  const overlayStyle = isDragging ? ({ pointerEvents: 'none' } as React.CSSProperties) : {};
 
   const shapeIconMap: Record<string, React.ElementType> = {
     circle: Circle,
@@ -331,17 +379,12 @@ export default function VREditorFullScreen({
 
   const typeBadgeMap = {
     info: { label: 'Info', icon: <Info size={10} />, color: 'bg-blue-100 text-blue-700' },
-    navigation: {
-      label: 'Nav',
-      icon: <Navigation size={10} />,
-      color: 'bg-green-100 text-green-700',
-    },
-    office: {
-      label: 'Office',
-      icon: <Building2 size={10} />,
-      color: 'bg-orange-100 text-orange-700',
-    },
+    navigation: { label: 'Nav', icon: <Navigation size={10} />, color: 'bg-green-100 text-green-700' },
+    office: { label: 'Office', icon: <Building2 size={10} />, color: 'bg-orange-100 text-orange-700' },
+    entrance: { label: 'Entrance', icon: <DoorOpen size={10} />, color: 'bg-purple-100 text-purple-700' },
   };
+
+  const officesList = offices || [];
 
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
@@ -422,9 +465,14 @@ export default function VREditorFullScreen({
           currentIndex={currentIndex}
           totalScenes={scenes.length}
           showNavigationArrows={true}
+          pathPoints={
+            editPathMode
+              ? pathPoints
+              : currentScene?.officePaths?.[pathOfficeId]?.points || null
+          }
         />
 
-        {/* Scene info panel (top left) */}
+        {/* Scene info panel */}
         {currentScene && (
           <div
             className="absolute top-14 left-4 bg-white/90 backdrop-blur rounded-xl p-3 w-56 shadow-lg z-20"
@@ -456,6 +504,30 @@ export default function VREditorFullScreen({
               className="w-full text-xs border rounded px-2 py-1 resize-none focus:ring-2 focus:ring-orange-400 focus:outline-none"
               placeholder="Description"
             />
+
+            <div className="mt-2">
+              <label className="text-[10px] text-gray-500 block mb-1">Floor</label>
+              <select
+                value={currentScene.floorId || ''}
+                onChange={(e) => {
+                  const updated = scenesRef.current.map((s) =>
+                    s.id === currentScene.id
+                      ? { ...s, floorId: e.target.value || undefined }
+                      : s
+                  );
+                  updateTourLocal(updated);
+                }}
+                className="w-full text-xs border rounded px-2 py-1 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-white"
+              >
+                <option value="">None</option>
+                {floors.map((floor) => (
+                  <option key={floor.id} value={floor.id}>
+                    {floor.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div className="mt-2">
               <label className="text-[10px] text-gray-500">Brightness</label>
               <input
@@ -471,7 +543,25 @@ export default function VREditorFullScreen({
           </div>
         )}
 
-        {/* Hotspot list (top right) */}
+        {/* Scene Path Editor (hiwalay na component) */}
+        {currentScene && (
+          <div className="absolute top-14 left-1/2 transform -translate-x-1/2 z-20">
+            <ScenePathEditor
+              tour={tour}
+              currentScene={currentScene}
+              offices={officesList}
+              onTourUpdate={onTourUpdate}
+              activeOfficeId={pathOfficeId}
+              onOfficeChange={setPathOfficeId}
+              activePoints={pathPoints}
+              onPointsChange={setPathPoints}
+              isEditing={editPathMode}
+              onEditModeChange={setEditPathMode}
+            />
+          </div>
+        )}
+
+        {/* Hotspot list */}
         {currentScene && (
           <div
             className="absolute top-14 right-4 bg-white/90 backdrop-blur rounded-xl shadow-lg z-20 w-56 max-h-72 overflow-hidden"
@@ -504,7 +594,7 @@ export default function VREditorFullScreen({
                       <div
                         key={h.id}
                         onClick={() => {
-                          handleHotspotClick(h);
+                          if (!editPathMode) handleHotspotClick(h);
                         }}
                         className={`flex items-center gap-2 text-xs py-1.5 px-2 rounded cursor-pointer transition-colors ${
                           isSelected ? 'bg-orange-100' : 'hover:bg-gray-100'
@@ -523,7 +613,7 @@ export default function VREditorFullScreen({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleDeleteHotspot(h.id);
+                            if (!editPathMode) handleDeleteHotspot(h.id);
                           }}
                           className="text-gray-400 hover:text-red-500 transition-colors"
                         >
@@ -539,7 +629,7 @@ export default function VREditorFullScreen({
         )}
 
         {/* Hotspot editor (bottom left) */}
-        {(newHotspotTemp || selectedHotspot) && (
+        {!editPathMode && (newHotspotTemp || selectedHotspot) && (
           <div
             className="absolute bottom-24 left-4 bg-white/95 backdrop-blur rounded-xl p-4 w-64 shadow-xl z-20 max-h-[55vh] overflow-y-auto border border-gray-200"
             style={overlayStyle}
@@ -574,6 +664,7 @@ export default function VREditorFullScreen({
                     <option value="info">ℹ️ Info</option>
                     <option value="navigation">🧭 Navigation</option>
                     <option value="office">🏢 Office</option>
+                    <option value="entrance">🚪 Entrance</option>
                   </select>
                   {hotspotType === 'navigation' && (
                     <select
@@ -739,6 +830,7 @@ export default function VREditorFullScreen({
                     <option value="info">ℹ️ Info</option>
                     <option value="navigation">🧭 Navigation</option>
                     <option value="office">🏢 Office</option>
+                    <option value="entrance">🚪 Entrance</option>
                   </select>
                   {hotspotType === 'navigation' && (
                     <select
@@ -873,40 +965,50 @@ export default function VREditorFullScreen({
           </div>
         )}
 
-        {/* Filmstrip (bottom) */}
+        {/* Filmstrip */}
         <div
           className="absolute bottom-0 left-0 right-0 h-24 bg-white/95 backdrop-blur border-t flex items-center px-4 gap-2 overflow-x-auto z-20"
-          style={overlayStyle}
+          onDragOver={handleDragOverFilmstrip}
         >
-          {scenes.map((scene, idx) => (
-            <div
-              key={scene.id}
-              className={`flex-shrink-0 w-20 text-center cursor-pointer rounded-lg p-1 transition-all ${
-                localSelectedSceneId === scene.id
-                  ? 'ring-2 ring-orange-500 shadow-md'
-                  : 'hover:bg-gray-100'
-              }`}
-              onClick={() => {
-                if (!isDragging && !newHotspotTemp && !selectedHotspotId) {
-                  setLocalSelectedSceneId(scene.id);
-                  propOnSelectScene(scene.id);
-                }
-              }}
-              draggable
-              onDragStart={(e) => handleDragStart(e, scene.id)}
-              onDragEnd={handleDragEnd}
-              onDragOver={handleDragOverFilmstrip}
-              onDrop={(e) => handleDropFilmstrip(e, scene.id)}
-            >
-              <div className="w-full h-12 rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
-                <img src={scene.url} alt={scene.label} className="w-full h-full object-cover" />
+          {scenes.map((scene, idx) => {
+            const isDraggingThis = scene.id === dragSceneId;
+            const isDragOver = scene.id === dragOverId;
+            return (
+              <div
+                key={scene.id}
+                className={`flex-shrink-0 w-20 text-center cursor-grab rounded-lg p-1 transition-all ${
+                  localSelectedSceneId === scene.id
+                    ? 'ring-2 ring-orange-500 shadow-md'
+                    : 'hover:bg-gray-100'
+                } ${isDraggingThis ? 'opacity-30 scale-95' : ''} ${
+                  isDragOver ? 'border-2 border-dashed border-orange-400' : ''
+                }`}
+                draggable={!newHotspotTemp && !selectedHotspotId && !editPathMode}
+                onDragStart={(e) => handleDragStart(e, scene.id)}
+                onDragEnd={handleDragEnd}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  handleDragEnterItem(scene.id);
+                }}
+                onDragLeave={handleDragLeaveItem}
+                onDrop={(e) => handleDropFilmstrip(e, scene.id)}
+                onClick={() => {
+                  if (!isDragging && !newHotspotTemp && !selectedHotspotId && !editPathMode) {
+                    setLocalSelectedSceneId(scene.id);
+                    propOnSelectScene(scene.id);
+                  }
+                }}
+              >
+                <div className="w-full h-12 rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+                  <img src={scene.url} alt={scene.label} className="w-full h-full object-cover" />
+                </div>
+                <p className="text-[10px] mt-1 truncate font-medium text-gray-700">
+                  {scene.label}
+                </p>
+                <span className="text-[9px] text-gray-400">{idx + 1}</span>
               </div>
-              <p className="text-[10px] mt-1 truncate font-medium text-gray-700">
-                {scene.label}
-              </p>
-              <span className="text-[9px] text-gray-400">{idx + 1}</span>
-            </div>
-          ))}
+            );
+          })}
           {scenes.length === 0 && (
             <p className="text-xs text-gray-400 w-full text-center">No scenes uploaded yet</p>
           )}

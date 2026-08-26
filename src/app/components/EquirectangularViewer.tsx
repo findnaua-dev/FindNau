@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, forwardRef, useImperativeHandle, useCallback } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  forwardRef,
+  useImperativeHandle,
+} from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
@@ -38,21 +44,32 @@ interface ViewerProps {
   gazeTimeout?: number;
   showReticle?: boolean;
   preloadUrls?: string[];
+  onRotate?: (degrees: number) => void;
+  /** Path points in {lon, lat} format */
+  pathPoints?: { lon: number; lat: number }[] | null;
 }
 
 export interface EquirectangularViewerHandle {
   enterVR: () => Promise<void>;
   exitVR: () => Promise<void>;
   isVRActive: () => boolean;
+  setDirection: (degrees: number) => void;
+  getCamera?: () => THREE.PerspectiveCamera | null;
+  getRenderer?: () => THREE.WebGLRenderer | null;
+  getScene?: () => THREE.Scene | null;
+  getControls?: () => OrbitControls | null;
 }
 
+// ===== TAMANG MAPPING PARA SA FLIPPED SPHERE =====
+// Nag-flip tayo ng sphere gamit ang scale.x = -1 para mawala ang mirroring.
+// Ito ang katumbas na conversion mula lat/lon papuntang 3D position.
 const latLonToPosition = (lat: number, lon: number, radius = 10): THREE.Vector3 => {
-  const phi = THREE.MathUtils.degToRad(90 - lat);
-  const theta = THREE.MathUtils.degToRad(lon);
+  const phi = THREE.MathUtils.degToRad(90 - lat); // polar angle mula sa Y axis
+  const theta = THREE.MathUtils.degToRad(lon);     // azimuth angle (0 = harap)
   return new THREE.Vector3(
-    -radius * Math.sin(phi) * Math.cos(theta),
-    radius * Math.cos(phi),
-    radius * Math.sin(phi) * Math.sin(theta)
+    radius * Math.sin(theta) * Math.sin(phi), // x
+    radius * Math.cos(phi),                  // y
+    -radius * Math.cos(theta) * Math.sin(phi) // z
   );
 };
 
@@ -82,6 +99,8 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       gazeTimeout = 5000,
       showReticle = false,
       preloadUrls = [],
+      onRotate,
+      pathPoints = null,
     },
     ref
   ) => {
@@ -92,8 +111,8 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
     const sphereRef = useRef<THREE.Mesh | null>(null);
     const controlsRef = useRef<OrbitControls | null>(null);
     const hotspotsGroupRef = useRef<THREE.Group>(new THREE.Group());
+    const pathLineRef = useRef<THREE.Line | null>(null);
 
-    // ─── NEW: ref to safely read VR state inside the animation loop ───
     const vrActiveRef = useRef(false);
     const vrSessionRef = useRef<XRSession | null>(null);
 
@@ -109,11 +128,18 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
     const [transitionActive, setTransitionActive] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
 
-    // Keep a ref to the onDropScene callback
     const onDropSceneRef = useRef(onDropScene);
-    useEffect(() => { onDropSceneRef.current = onDropScene; }, [onDropScene]);
+    useEffect(() => {
+      onDropSceneRef.current = onDropScene;
+    }, [onDropScene]);
 
-    // Fullscreen toggle and listener
+    const onRotateRef = useRef(onRotate);
+    useEffect(() => {
+      onRotateRef.current = onRotate;
+    }, [onRotate]);
+
+    const lastEmittedDegRef = useRef(0);
+
     useEffect(() => {
       const handleFullscreenChange = () => {
         setIsFullscreen(!!document.fullscreenElement);
@@ -122,7 +148,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, []);
 
-    // Sync vrActive state to ref so the animation loop always has the latest value
     useEffect(() => {
       vrActiveRef.current = vrActive;
     }, [vrActive]);
@@ -143,7 +168,6 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
             session.addEventListener('end', () => {
               vrSessionRef.current = null;
               setVrActive(false);
-              // Re-enable controls after VR ends (if they were disabled)
               if (controlsRef.current) controlsRef.current.enabled = true;
             });
           }
@@ -155,13 +179,21 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         await vrSessionRef.current?.end();
       },
       isVRActive: () => vrActive,
+      setDirection: (degrees: number) => {
+        const controls = controlsRef.current;
+        if (!controls) return;
+        const rad = THREE.MathUtils.degToRad(degrees);
+        controls.spherical.theta = rad;
+        controls.update();
+        lastEmittedDegRef.current = degrees;
+      },
       getCamera: () => cameraRef.current,
       getRenderer: () => rendererRef.current,
       getScene: () => sceneRef.current,
       getControls: () => controlsRef.current,
     }));
 
-    // ─── SETUP SCENE, CAMERA, RENDERER ───────────────────────────────
+    // Main scene setup
     useEffect(() => {
       if (!mountRef.current) return;
       const width = mountRef.current.clientWidth;
@@ -191,31 +223,43 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         geometry,
         new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide })
       );
+      // ===== MAHALAGA: I-flip ang sphere para mawala ang mirroring =====
+      sphere.scale.x = -1;
       scene.add(sphere);
       sphereRef.current = sphere;
 
-      // Add empty group for hotspots
       scene.add(hotspotsGroupRef.current);
+
+      // Create an empty line for the path
+      const lineMaterial = new THREE.LineBasicMaterial({ color: '#F97316', linewidth: 2 });
+      const lineGeometry = new THREE.BufferGeometry();
+      const pathLine = new THREE.Line(lineGeometry, lineMaterial);
+      scene.add(pathLine);
+      pathLineRef.current = pathLine;
 
       sceneRef.current = scene;
       cameraRef.current = camera;
       rendererRef.current = renderer;
 
-      // ─── CORRECTED ANIMATION LOOP (WebXR compatible) ───────────────
       const animate = () => {
-        // Only update OrbitControls when NOT in VR and NOT dragging a hotspot
         if (!vrActiveRef.current && !isDraggingOverlayRef.current) {
           controls.update();
+          if (onRotateRef.current) {
+            const az = controls.getAzimuthalAngle();
+            let deg = THREE.MathUtils.radToDeg(az);
+            deg = ((deg + 180) % 360 + 360) % 360 - 180;
+            if (Math.abs(deg - lastEmittedDegRef.current) > 1) {
+              lastEmittedDegRef.current = deg;
+              onRotateRef.current(deg);
+            }
+          }
         }
         renderer.render(scene, camera);
-        // Reticle detection only in non‑VR mode
         if (enableReticle && !vrActiveRef.current) detectReticle();
       };
 
-      // Use setAnimationLoop instead of requestAnimationFrame!
       renderer.setAnimationLoop(animate);
 
-      // ─── RESIZE HANDLER ─────────────────────────────────────────────
       const handleResize = () => {
         if (!mountRef.current || !cameraRef.current || !rendererRef.current) return;
         const w = mountRef.current.clientWidth;
@@ -226,18 +270,23 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       };
       window.addEventListener('resize', handleResize);
 
-      // ─── CLEANUP ────────────────────────────────────────────────────
+      const resizeObserver = new ResizeObserver(() => {
+        handleResize();
+      });
+      resizeObserver.observe(mountRef.current);
+
       return () => {
-        renderer.setAnimationLoop(null);   // stop the loop
+        resizeObserver.disconnect();
+        renderer.setAnimationLoop(null);
         window.removeEventListener('resize', handleResize);
         renderer.dispose();
         if (mountRef.current && renderer.domElement.parentNode === mountRef.current) {
           mountRef.current.removeChild(renderer.domElement);
         }
       };
-    }, [enableReticle]); // enableReticle is used inside animate, so re‑create loop if it changes
+    }, [enableReticle]);
 
-    // ─── TEXTURE LOADING ─────────────────────────────────────────────
+    // Load the 360 texture
     useEffect(() => {
       if (!sphereRef.current) return;
       const loader = new THREE.TextureLoader();
@@ -259,7 +308,10 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
           if (cached) return resolve(cached);
           loader.load(
             url,
-            (t) => { textureCache.set(url, t); resolve(t); },
+            (t) => {
+              textureCache.set(url, t);
+              resolve(t);
+            },
             undefined,
             () => {
               if (attempt < 2)
@@ -287,7 +339,27 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         });
     }, [sceneUrl, brightness]);
 
-    // ─── HOTSPOT SPRITES ────────────────────────────────────────────
+    // Update the 3D path line when pathPoints changes
+    useEffect(() => {
+      const line = pathLineRef.current;
+      if (!line) return;
+
+      if (!pathPoints || pathPoints.length < 2) {
+        line.visible = false;
+        return;
+      }
+
+      const points: THREE.Vector3[] = pathPoints.map((p) => {
+        return latLonToPosition(p.lat, p.lon, 9.8);
+      });
+
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      line.geometry.dispose();
+      line.geometry = geometry;
+      line.visible = true;
+    }, [pathPoints]);
+
+    // Hotspots update
     useEffect(() => {
       const group = hotspotsGroupRef.current;
       while (group.children.length) {
@@ -394,7 +466,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       });
     }, [hotspots]);
 
-    // ─── RETICLE DETECTION (helper) ────────────────────────────────
+    // Reticle detection (non-VR mode)
     const detectReticle = () => {
       if (!cameraRef.current || !onReticleHit) return;
       const raycaster = new THREE.Raycaster();
@@ -407,7 +479,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       }
     };
 
-    // ─── POINTER / DRAG / DROP EVENTS ──────────────────────────────
+    // Pointer and drag handlers
     useEffect(() => {
       const container = mountRef.current!;
       if (!container) return;
@@ -467,8 +539,9 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
           const intersects = raycaster.intersectObject(sphereRef.current!);
           if (intersects.length > 0) {
             const point = intersects[0].point.clone().normalize();
+            // ===== TAMANG INVERSE FORMULA =====
             const lat = 90 - Math.acos(point.y) * (180 / Math.PI);
-            const lon = Math.atan2(point.z, -point.x) * (180 / Math.PI);
+            const lon = Math.atan2(point.x, -point.z) * (180 / Math.PI);
             lastDragPos.current = { lon, lat };
             onHotspotMove?.(draggedSpriteRef.current.userData.hotspot.id, lon, lat);
           }
@@ -526,8 +599,9 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
             const sphereHits = raycaster.intersectObject(sphereRef.current);
             if (sphereHits.length > 0) {
               const point = sphereHits[0].point.clone().normalize();
+              // ===== TAMANG INVERSE FORMULA =====
               const lat = 90 - Math.acos(point.y) * (180 / Math.PI);
-              const lon = Math.atan2(point.z, -point.x) * (180 / Math.PI);
+              const lon = Math.atan2(point.x, -point.z) * (180 / Math.PI);
               onClickScene(lon, lat);
             }
           }
@@ -556,8 +630,9 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         const intersects = raycaster.intersectObject(sphereRef.current!);
         if (intersects.length > 0) {
           const point = intersects[0].point.clone().normalize();
+          // ===== TAMANG INVERSE FORMULA =====
           const lat = 90 - Math.acos(point.y) * (180 / Math.PI);
-          const lon = Math.atan2(point.z, -point.x) * (180 / Math.PI);
+          const lon = Math.atan2(point.x, -point.z) * (180 / Math.PI);
           onDropSceneRef.current(lon, lat, sceneId);
         }
       };
@@ -583,28 +658,40 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
       };
     }, [isAdmin, onHotspotClick, onClickScene, enableClickToPlace, onHotspotMove, onHotspotMoveEnd]);
 
-    // ─── GAZE TIMER ────────────────────────────────────────────────
+    // Gaze-based hotspot triggering (non-VR)
     useEffect(() => {
       if (!showReticle || !onHotspotGaze) return;
       let frame: number;
       const raycaster = new THREE.Raycaster();
-      let start = 0, current: HotspotData | null = null;
+      let start = 0,
+        current: HotspotData | null = null;
       const check = () => {
         if (!cameraRef.current) return;
         raycaster.setFromCamera(new THREE.Vector2(0, 0), cameraRef.current);
         const hits = raycaster.intersectObjects(hotspotsGroupRef.current.children);
         if (hits.length > 0) {
           const h = (hits[0].object as THREE.Sprite).userData.hotspot;
-          if (current?.id !== h.id) { current = h; start = performance.now(); }
+          if (current?.id !== h.id) {
+            current = h;
+            start = performance.now();
+          }
           const progress = Math.min((performance.now() - start) / gazeTimeout, 1);
-          if (progress >= 1) { onHotspotGaze(h); current = null; start = 0; }
-        } else { current = null; start = 0; }
+          if (progress >= 1) {
+            onHotspotGaze(h);
+            current = null;
+            start = 0;
+          }
+        } else {
+          current = null;
+          start = 0;
+        }
         frame = requestAnimationFrame(check);
       };
       frame = requestAnimationFrame(check);
       return () => cancelAnimationFrame(frame);
     }, [showReticle, onHotspotGaze, gazeTimeout, hotspots]);
 
+    // Retry loading
     const retryLoad = () => {
       textureCache.delete(sceneUrl);
       setIsLoading(true);
@@ -639,11 +726,19 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
             <div className="text-center text-white">
               <p className="text-lg font-semibold mb-1">Image failed to load</p>
               <p className="text-xs text-gray-400 mb-3">Check the URL or network connection.</p>
-              <button onClick={retryLoad} className="px-4 py-2 bg-white text-black rounded-lg text-sm">Retry</button>
+              <button
+                onClick={retryLoad}
+                className="px-4 py-2 bg-white text-black rounded-lg text-sm"
+              >
+                Retry
+              </button>
             </div>
           </div>
         )}
-        <div className="absolute inset-0 bg-black z-10 pointer-events-none transition-opacity duration-300" style={{ opacity: transitionActive ? 0.3 : 0 }} />
+        <div
+          className="absolute inset-0 bg-black z-10 pointer-events-none transition-opacity duration-300"
+          style={{ opacity: transitionActive ? 0.3 : 0 }}
+        />
         {showReticleUI && (
           <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center">
             <svg width="32" height="32" viewBox="0 0 32 32">
@@ -657,9 +752,21 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         )}
         {isAdmin && onSceneChange && !isLoading && !loadError && (
           <div className="absolute bottom-4 left-4 right-4 flex justify-center z-10 gap-2">
-            <button onClick={() => onSceneChange(-1)} className="bg-black/60 text-white px-3 py-1.5 rounded-full text-sm hover:bg-black/80">Prev</button>
-            <span className="text-white bg-black/60 px-3 py-1 rounded-full text-sm">{currentIndex! + 1} / {totalScenes}</span>
-            <button onClick={() => onSceneChange(1)} className="bg-black/60 text-white px-3 py-1.5 rounded-full text-sm hover:bg-black/80">Next</button>
+            <button
+              onClick={() => onSceneChange(-1)}
+              className="bg-black/60 text-white px-3 py-1.5 rounded-full text-sm hover:bg-black/80"
+            >
+              Prev
+            </button>
+            <span className="text-white bg-black/60 px-3 py-1 rounded-full text-sm">
+              {currentIndex! + 1} / {totalScenes}
+            </span>
+            <button
+              onClick={() => onSceneChange(1)}
+              className="bg-black/60 text-white px-3 py-1.5 rounded-full text-sm hover:bg-black/80"
+            >
+              Next
+            </button>
           </div>
         )}
         {!isAdmin && !isLoading && !loadError && (

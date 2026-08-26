@@ -58,6 +58,7 @@ export interface Office {
   vrTour: boolean;
   mapX: number;
   mapY: number;
+  vrSceneId?: string; // ✅ NEW: linked 360 scene ID
 }
 
 // ---------- Offices Collection ----------

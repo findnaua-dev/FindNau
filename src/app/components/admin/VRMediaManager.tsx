@@ -1,10 +1,8 @@
-// ============================================================
-// FILE: src/app/components/admin/VRMediaManager.tsx
-// ============================================================
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, X, ArrowRight, AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
+import { Upload, X, ArrowRight, CheckCircle, Loader2 } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 import { VRTour, VRScene } from '../../../services/vrTourService';
+import { useMapSettingsRealtime, MapFloor } from '../../../services/mapService';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 
 interface VRMediaManagerProps {
@@ -37,11 +35,36 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [labelEdits, setLabelEdits] = useState<Record<string, string>>({});
 
+  // Floors for assignment
+  const [floors, setFloors] = useState<MapFloor[]>([]);
+  const [selectedFloorId, setSelectedFloorId] = useState<string>('');
+
+  const scenesRef = useRef<VRScene[]>(tour?.scenes || []);
+  const tourRef = useRef<VRTour | null>(tour);
+
+  useEffect(() => {
+    const unsub = useMapSettingsRealtime((settings) => {
+      if (settings.floors?.length) {
+        setFloors(settings.floors);
+        if (!selectedFloorId) {
+          setSelectedFloorId(settings.floors[0].id);
+        }
+      }
+    });
+    return () => unsub();
+  }, []);
+
   useEffect(() => {
     if (tour) {
       setScenes(tour.scenes);
+      scenesRef.current = tour.scenes;
+      tourRef.current = tour;
     }
   }, [tour]);
+
+  useEffect(() => {
+    scenesRef.current = scenes;
+  }, [scenes]);
 
   useEffect(() => {
     const initialEdits: Record<string, string> = {};
@@ -62,7 +85,6 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
     setUploading(true);
     setError('');
 
-    // Initialize upload tasks
     const tasks: UploadTask[] = Array.from(files).map((file) => ({
       id: Date.now().toString() + Math.random().toString(36).substr(2, 6),
       file,
@@ -71,12 +93,8 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
     }));
     setUploadTasks((prev) => [...prev, ...tasks]);
 
-    const total = tasks.length;
-    let completed = 0;
-
     const uploadSingle = async (task: UploadTask) => {
       try {
-        // Update status to uploading
         setUploadTasks((prev) =>
           prev.map((t) => (t.id === task.id ? { ...t, status: 'uploading' } : t))
         );
@@ -128,30 +146,35 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
 
         const result = await uploadPromise;
 
-        // Auto-save: create scene and update tour immediately
         const newScene: VRScene = {
           id: Date.now().toString() + task.id,
           url: result.secure_url,
           label: task.file.name.replace(/\.[^/.]+$/, ''),
           description: '',
+          floorId: selectedFloorId,
           hotspots: [],
+          officePaths: {}, // <-- Initialize empty
         };
 
-        // Update local scenes state
-        const updatedScenes = [...scenes, newScene];
+        const updatedScenes = [...scenesRef.current, newScene];
+        scenesRef.current = updatedScenes;
         setScenes(updatedScenes);
 
-        // Persist to database via parent
         const updatedTour: VRTour = {
-          ...tour,
-          id: tour?.id || 'buildingTour',
-          name: tour?.name || 'Building Tour',
-          description: tour?.description || '',
+          ...(tourRef.current || {
+            id: 'buildingTour',
+            name: 'Building Tour',
+            description: 'Virtual tour of the building',
+            scenes: [],
+          }),
+          id: tourRef.current?.id || 'buildingTour',
+          name: tourRef.current?.name || 'Building Tour',
+          description: tourRef.current?.description || '',
           scenes: updatedScenes,
         };
+        tourRef.current = updatedTour;
         onTourUpdate(updatedTour);
 
-        // Mark task as done
         setUploadTasks((prev) =>
           prev.map((t) =>
             t.id === task.id
@@ -159,8 +182,6 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
               : t
           )
         );
-
-        completed++;
       } catch (err: any) {
         setUploadTasks((prev) =>
           prev.map((t) =>
@@ -169,21 +190,14 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
               : t
           )
         );
-        completed++;
       }
     };
 
-    // Upload all files in parallel with concurrency limit
     const concurrency = 3;
-    const chunks = [];
     for (let i = 0; i < tasks.length; i += concurrency) {
-      chunks.push(tasks.slice(i, i + concurrency));
-    }
-    for (const chunk of chunks) {
-      await Promise.all(chunk.map((task) => uploadSingle(task)));
+      await Promise.all(tasks.slice(i, i + concurrency).map((task) => uploadSingle(task)));
     }
 
-    // Check if any tasks failed
     const hasErrors = uploadTasks.some((t) => t.status === 'error');
     if (hasErrors) {
       setError('Some images failed to upload. Check the list below for details.');
@@ -200,9 +214,10 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
     if (scene && scene.label !== newLabel) {
       const updated = scenes.map((s) => (s.id === sceneId ? { ...s, label: newLabel } : s));
       setScenes(updated);
+      scenesRef.current = updated;
       onTourUpdate({
-        ...tour!,
-        id: tour?.id || 'buildingTour',
+        ...(tourRef.current || { id: 'buildingTour', name: 'Building Tour', description: '', scenes: [] }),
+        id: tourRef.current?.id || 'buildingTour',
         scenes: updated,
       });
     }
@@ -216,9 +231,10 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
     if (!deleteConfirmSingle) return;
     const updated = scenes.filter((s) => s.id !== deleteConfirmSingle);
     setScenes(updated);
+    scenesRef.current = updated;
     onTourUpdate({
-      ...tour!,
-      id: tour?.id || 'buildingTour',
+      ...(tourRef.current || { id: 'buildingTour', name: 'Building Tour', description: '', scenes: [] }),
+      id: tourRef.current?.id || 'buildingTour',
       scenes: updated,
     });
     setDeleteConfirmSingle(null);
@@ -233,9 +249,10 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
   const confirmDeleteMultiple = () => {
     const updated = scenes.filter((s) => !selectedIds.includes(s.id));
     setScenes(updated);
+    scenesRef.current = updated;
     onTourUpdate({
-      ...tour!,
-      id: tour?.id || 'buildingTour',
+      ...(tourRef.current || { id: 'buildingTour', name: 'Building Tour', description: '', scenes: [] }),
+      id: tourRef.current?.id || 'buildingTour',
       scenes: updated,
     });
     setSelectedIds([]);
@@ -258,6 +275,28 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
           <br />
           <span className="text-xs text-green-600">✓ Images are auto‑saved as soon as each upload finishes.</span>
         </p>
+
+        <div className="mb-4">
+          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-2">
+            Assign Floor for New Scenes
+          </label>
+          <select
+            value={selectedFloorId}
+            onChange={(e) => setSelectedFloorId(e.target.value)}
+            className="w-full md:w-64 border rounded-lg px-3 py-2 text-sm bg-white"
+            disabled={floors.length === 0}
+          >
+            {floors.length === 0 ? (
+              <option value="">Loading floors...</option>
+            ) : (
+              floors.map((floor) => (
+                <option key={floor.id} value={floor.id}>
+                  {floor.label}
+                </option>
+              ))
+            )}
+          </select>
+        </div>
 
         <div
           onDragOver={(e) => e.preventDefault()}
@@ -283,7 +322,6 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
 
         {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
 
-        {/* Upload progress list */}
         {uploadTasks.length > 0 && (
           <div className="mt-4 space-y-2">
             <div className="flex items-center justify-between text-sm">
@@ -398,18 +436,17 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
         )}
       </div>
 
-      {/* Bottom actions */}
-      <div className="flex justify-end">
+      {/* Bottom actions – STICKY */}
+      <div className="sticky bottom-0 bg-white/90 backdrop-blur-sm border-t border-gray-200 p-4 mt-6 flex justify-end z-10">
         <button
           onClick={onEnterEditor}
           disabled={scenes.length === 0}
-          className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="bg-orange-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
         >
           Go to Editor <ArrowRight size={16} />
         </button>
       </div>
 
-      {/* Confirm Dialogs */}
       <ConfirmDialog
         open={!!deleteConfirmSingle}
         onConfirm={confirmDeleteSingle}

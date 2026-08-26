@@ -11,6 +11,7 @@ import { useBuildingTourRealtime, saveBuildingTour, VRTour } from '../../../serv
 import ImageUpload from '../ui/ImageUpload';
 import VRMediaManager from './VRMediaManager';
 import VREditorFullScreen from './VREditorFullScreen';
+import PathEditor from './PathEditor';
 import { SHAPES } from './mapConstants';
 
 const renderMapMarker = (dot: any, isSelected: boolean) => {
@@ -44,7 +45,6 @@ export default function AdminMap() {
   const { offices, loading } = useOffices();
   const [activeTab, setActiveTab] = useState<'2d' | 'vr'>('2d');
 
-  // 2D map states
   const [selectedOffice, setSelectedOffice] = useState<string | null>(null);
   const [activeFloor, setActiveFloor] = useState<string>('ground');
   const [showAddFloor, setShowAddFloor] = useState(false);
@@ -57,27 +57,50 @@ export default function AdminMap() {
   const svgRef = useRef<SVGSVGElement>(null);
   const [floorMaps, setFloorMaps] = useState<MapFloor[]>([]);
   const [localDots, setLocalDots] = useState<any[]>([]);
+  const [settingEntrance, setSettingEntrance] = useState(false);
 
-  // VR states
   const [vrMode, setVrMode] = useState<'upload' | 'editor'>('upload');
   const [vrTour, setVrTour] = useState<VRTour | null>(null);
   const [vrLoading, setVrLoading] = useState(true);
   const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
   const [vrSaveLoading, setVrSaveLoading] = useState(false);
 
-  // ---------- Floor maps realtime ----------
   useEffect(() => {
     const unsubscribe = useMapSettingsRealtime((settings) => {
       if (settings.floors?.length) {
         setFloorMaps(settings.floors);
       } else {
-        const defaults = [{ id: 'ground', label: 'Ground Floor', url: '', width: 800, height: 600 }];
+        const defaults = [{ id: 'ground', label: 'Ground Floor', url: '', width: 800, height: 600, entrance: undefined, paths: [] }];
         setFloorMaps(defaults);
         saveMapSettings({ floors: defaults }).catch(console.error);
       }
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    setVrLoading(true);
+    const unsubscribe = useBuildingTourRealtime((data) => {
+      if (data) {
+        setVrTour(data);
+      } else {
+        setVrTour({
+          id: 'buildingTour',
+          name: 'Building Tour',
+          description: 'Virtual tour of the building',
+          scenes: [],
+        });
+      }
+      setVrLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (vrTour && vrTour.scenes?.length && !selectedSceneId) {
+      setSelectedSceneId(vrTour.scenes[0].id);
+    }
+  }, [vrTour, selectedSceneId]);
 
   const officesOnFloor = useMemo(
     () => offices.filter(office => (office.floorId || 'ground') === activeFloor),
@@ -108,7 +131,12 @@ export default function AdminMap() {
   const imgWidth = activeFloorMap?.width || 800;
   const imgHeight = activeFloorMap?.height || 600;
   const VIEWBOX_WIDTH = 100;
-  const VIEWBOX_HEIGHT = Math.round(100 / (imgWidth / imgHeight));
+  const VIEWBOX_HEIGHT = imgWidth > 0 && imgHeight > 0
+    ? Math.round(100 / (imgWidth / imgHeight))
+    : 100;
+  const safeMapScale = mapScale > 0 ? mapScale : 1;
+  const effectiveVBWidth = VIEWBOX_WIDTH / safeMapScale;
+  const effectiveVBHeight = VIEWBOX_HEIGHT / safeMapScale;
 
   const showMessage = (msg: string, type: 'success' | 'error' = 'success') => {
     setSaveMessage(msg);
@@ -116,35 +144,6 @@ export default function AdminMap() {
     setTimeout(() => setSaveMessage(null), 4000);
   };
 
-  // ---------- VR realtime (NO initial scene selection here) ----------
-  useEffect(() => {
-    if (activeTab === 'vr') {
-      setVrLoading(true);
-      const unsubscribe = useBuildingTourRealtime((data) => {
-        if (data) {
-          setVrTour(data);
-        } else {
-          setVrTour({
-            id: 'buildingTour',
-            name: 'Building Tour',
-            description: 'Virtual tour of the building',
-            scenes: [],
-          });
-        }
-        setVrLoading(false);
-      });
-      return () => unsubscribe();
-    }
-  }, [activeTab]);
-
-  // ---------- Set initial scene only when tour loads and no scene selected ----------
-  useEffect(() => {
-    if (vrTour && vrTour.scenes?.length && !selectedSceneId) {
-      setSelectedSceneId(vrTour.scenes[0].id);
-    }
-  }, [vrTour, selectedSceneId]);
-
-  // ---------- 2D map handlers (unchanged) ----------
   const handleFloorImageUpload = async (url: string) => {
     const img = new window.Image();
     img.onload = async () => {
@@ -188,7 +187,7 @@ export default function AdminMap() {
   const handleAddFloor = async () => {
     if (!newFloorLabel.trim()) return;
     const floorId = newFloorLabel.toLowerCase().replace(/\s+/g, '-');
-    const updatedFloors = [...floorMaps, { id: floorId, label: newFloorLabel, url: '', width: 800, height: 600 }];
+    const updatedFloors = [...floorMaps, { id: floorId, label: newFloorLabel, url: '', width: 800, height: 600, entrance: undefined, paths: [] }];
     setFloorMaps(updatedFloors);
     try {
       await saveMapSettings({ floors: updatedFloors });
@@ -222,10 +221,12 @@ export default function AdminMap() {
   const handleSvgMouseMove = (event: React.MouseEvent) => {
     if (!draggingDotId || !svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
-    const newX = Math.round(((event.clientX - rect.left) / rect.width) * 1000) / 10;
-    const newY = Math.round(((event.clientY - rect.top) / rect.height) * 1000) / 10;
+    const newX = ((event.clientX - rect.left) / rect.width) * effectiveVBWidth;
+    const newY = ((event.clientY - rect.top) / rect.height) * effectiveVBHeight;
+    const roundedX = Math.round(newX * 10) / 10;
+    const roundedY = Math.round(newY * 10) / 10;
     setLocalDots(prev =>
-      prev.map(dot => (dot.id === draggingDotId ? { ...dot, x: newX, y: newY } : dot))
+      prev.map(dot => (dot.id === draggingDotId ? { ...dot, x: roundedX, y: roundedY } : dot))
     );
   };
 
@@ -239,6 +240,23 @@ export default function AdminMap() {
     setDraggingDotId(null);
   };
 
+  const handleSvgBackgroundClick = (event: React.MouseEvent<SVGSVGElement>) => {
+    if (!settingEntrance || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * effectiveVBWidth;
+    const y = ((event.clientY - rect.top) / rect.height) * effectiveVBHeight;
+    const roundedX = Math.round(x * 10) / 10;
+    const roundedY = Math.round(y * 10) / 10;
+    const updatedFloors = floorMaps.map(floor =>
+      floor.id === activeFloor ? { ...floor, entrance: { x: roundedX, y: roundedY } } : floor
+    );
+    setFloorMaps(updatedFloors);
+    saveMapSettings({ floors: updatedFloors })
+      .then(() => showMessage('Entrance saved.'))
+      .catch(() => showMessage('Failed to save entrance.', 'error'));
+    setSettingEntrance(false);
+  };
+
   const updateDotProperty = (dotId: string, updates: any) => {
     setLocalDots(prev =>
       prev.map(dot => (dot.id === dotId ? { ...dot, ...updates } : dot))
@@ -249,13 +267,39 @@ export default function AdminMap() {
     }
   };
 
-  // ---------- VR handlers (NO auto‑save) ----------
-  const handleScenesUploaded = (updatedTour: VRTour) => {
-    setVrTour(updatedTour);
-    if (updatedTour.scenes?.length) {
-      setSelectedSceneId(updatedTour.scenes[0].id);
-      setTimeout(() => setVrMode('editor'), 100);
+  const handleSavePath = async (officeId: string, points: { x: number; y: number }[]) => {
+    const updatedFloors = floorMaps.map(floor => {
+      if (floor.id !== activeFloor) return floor;
+      const existingPaths = floor.paths || [];
+      const filtered = existingPaths.filter(p => p.officeId !== officeId);
+      return { ...floor, paths: [...filtered, { officeId, points }] };
+    });
+    setFloorMaps(updatedFloors);
+    try {
+      await saveMapSettings({ floors: updatedFloors });
+      showMessage('Path saved.');
+    } catch {
+      showMessage('Failed to save path.', 'error');
     }
+  };
+
+  const handleClearPath = async (officeId: string) => {
+    const updatedFloors = floorMaps.map(floor => {
+      if (floor.id !== activeFloor) return floor;
+      return { ...floor, paths: (floor.paths || []).filter(p => p.officeId !== officeId) };
+    });
+    setFloorMaps(updatedFloors);
+    try {
+      await saveMapSettings({ floors: updatedFloors });
+      showMessage('Path cleared.');
+    } catch {
+      showMessage('Failed to clear path.', 'error');
+    }
+  };
+
+  // ✅ FIX: Hindi na auto-enter pagkatapos ng upload
+  const handleTourStateUpdate = (updated: VRTour) => {
+    setVrTour(updated);
   };
 
   const handleEnterEditor = () => {
@@ -263,14 +307,12 @@ export default function AdminMap() {
       showMessage('Add at least one image first.', 'error');
       return;
     }
+    if (!selectedSceneId) {
+      setSelectedSceneId(vrTour.scenes[0].id);
+    }
     setVrMode('editor');
   };
 
-  const handleTourStateUpdate = (updated: VRTour) => {
-    setVrTour(updated); // state only, no Firestore write
-  };
-
-  // Clean undefined values before saving
   function removeUndefined(obj: any): any {
     if (Array.isArray(obj)) {
       return obj.map(removeUndefined);
@@ -364,6 +406,19 @@ export default function AdminMap() {
       {/* ==================== 2D MAP ==================== */}
       {activeTab === '2d' && (
         <div className="space-y-4">
+          {/* 🧭 STEP-BY-STEP BANNER */}
+          <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-sm text-orange-800">
+            <p className="font-bold mb-2">Steps para sa paggawa ng path:</p>
+            <ol className="list-decimal ml-5 space-y-1">
+              <li>Pumili ng <strong>Floor</strong>.</li>
+              <li>Mag-upload ng <strong>Floor Plan Image</strong>.</li>
+              <li>I-click ang <strong>"Set Entrance"</strong> tapos i-click ang mapa para maglagay ng berdeng entrance dot.</li>
+              <li>Pumili ng <strong>Office</strong> (i-click ang dot o pumili sa listahan).</li>
+              <li>I-click ang <strong>"Draw Path"</strong> sa ibaba, pagkatapos i-click ang mapa para maglagay ng daanan.</li>
+              <li>I-click ang <strong>"Finish"</strong> para ma-save ang path.</li>
+            </ol>
+          </div>
+
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
             <p className="font-medium mb-2">How to set up the 2D map:</p>
             <ol className="list-decimal ml-5 space-y-1 text-xs">
@@ -407,9 +462,22 @@ export default function AdminMap() {
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
             <div className="lg:col-span-3 space-y-3">
               <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide block mb-3">
-                  {activeFloorMap?.label || 'Floor'} — Floor Plan Image
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    {activeFloorMap?.label || 'Floor'} — Floor Plan Image
+                  </label>
+                  <button
+                    onClick={() => setSettingEntrance(true)}
+                    className={`text-xs font-medium px-2 py-1 rounded ${
+                      settingEntrance ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    Set Entrance
+                  </button>
+                </div>
+                {settingEntrance && (
+                  <p className="text-xs text-green-600 mb-2">Click on the map below to place the entrance marker.</p>
+                )}
                 <ImageUpload
                   onUpload={handleFloorImageUpload}
                   currentImage={activeFloorMap?.url}
@@ -431,17 +499,29 @@ export default function AdminMap() {
                 <div className="relative bg-gray-50" style={{ paddingBottom: `${(VIEWBOX_HEIGHT / VIEWBOX_WIDTH) * 100}%` }}>
                   <svg
                     ref={svgRef}
-                    viewBox={`0 0 ${VIEWBOX_WIDTH / mapScale} ${VIEWBOX_HEIGHT / mapScale}`}
+                    viewBox={`0 0 ${effectiveVBWidth} ${effectiveVBHeight}`}
                     className="absolute inset-0 w-full h-full"
                     onMouseMove={handleSvgMouseMove}
                     onMouseUp={handleSvgMouseUp}
                     onMouseLeave={handleSvgMouseUp}
+                    onClick={settingEntrance ? handleSvgBackgroundClick : undefined}
                   >
                     {activeFloorMap?.url ? (
-                      <image href={activeFloorMap.url} x="0" y="0" width={VIEWBOX_WIDTH / mapScale} height={VIEWBOX_HEIGHT / mapScale} />
+                      <image href={activeFloorMap.url} x="0" y="0" width={effectiveVBWidth} height={effectiveVBHeight} />
                     ) : (
-                      <rect width={VIEWBOX_WIDTH / mapScale} height={VIEWBOX_HEIGHT / mapScale} fill="#F1F5F9" />
+                      <rect width={effectiveVBWidth} height={effectiveVBHeight} fill="#F1F5F9" />
                     )}
+
+                    {/* Entrance marker */}
+                    {activeFloorMap?.entrance && (
+                      <g>
+                        <circle cx={activeFloorMap.entrance.x} cy={activeFloorMap.entrance.y} r={3.5} fill="#10B981" stroke="white" strokeWidth="0.8" />
+                        <text x={activeFloorMap.entrance.x} y={activeFloorMap.entrance.y - 5} textAnchor="middle" fontSize="2.5" fill="#047857" fontWeight="bold">
+                          ENTRANCE
+                        </text>
+                      </g>
+                    )}
+
                     {localDots.map(dot => {
                       const isSelected = selectedOffice === dot.officeId;
                       return (
@@ -527,6 +607,27 @@ export default function AdminMap() {
                           ))}
                         </select>
                       </div>
+
+                      {/* ✅ NEW: VR Scene Assignment Dropdown */}
+                      <div>
+                        <label className="text-[10px] text-gray-500 block mb-0.5">360° Scene</label>
+                        <select
+                          value={selectedOfficeData.vrSceneId || ''}
+                          onChange={async (event) => {
+                            const value = event.target.value || undefined;
+                            await updateOffice(selectedOfficeData.id!, { vrSceneId: value });
+                          }}
+                          className="w-full border rounded px-2 py-1.5 text-xs bg-white"
+                        >
+                          <option value="">None</option>
+                          {vrTour?.scenes
+                            ?.filter(scene => scene.floorId === selectedOfficeData.floorId)
+                            .map(scene => (
+                              <option key={scene.id} value={scene.id}>{scene.label}</option>
+                            ))}
+                        </select>
+                      </div>
+
                       <div>
                         <label className="text-[10px] text-gray-500 block mb-0.5">X: {dot.x.toFixed(1)}%</label>
                         <input
@@ -548,16 +649,19 @@ export default function AdminMap() {
                       <div>
                         <label className="text-[10px] text-gray-500 block mb-1">Shape</label>
                         <div className="flex gap-1">
-                          {SHAPES.map(shape => (
-                            <button
-                              key={shape.id}
-                              onClick={() => updateDotProperty(dot.id, { shape: shape.id })}
-                              className={`w-6 h-6 rounded border text-[10px] ${(dot.shape || 'circle') === shape.id ? 'border-gray-800 bg-white' : 'border-gray-200'}`}
-                              title={shape.label}
-                            >
-                              {shape.icon}
-                            </button>
-                          ))}
+                          {SHAPES.map(shape => {
+                            const IconComponent = shape.icon;
+                            return (
+                              <button
+                                key={shape.id}
+                                onClick={() => updateDotProperty(dot.id, { shape: shape.id })}
+                                className={`w-6 h-6 rounded border text-[10px] ${(dot.shape || 'circle') === shape.id ? 'border-gray-800 bg-white' : 'border-gray-200'}`}
+                                title={shape.label}
+                              >
+                                <IconComponent size={14} />
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                       <div>
@@ -575,6 +679,28 @@ export default function AdminMap() {
               })()}
             </div>
           </div>
+
+          {/* Path Editor for selected office */}
+          {selectedOfficeData && selectedOfficeData.id && activeFloorMap?.entrance && VIEWBOX_WIDTH > 0 && VIEWBOX_HEIGHT > 0 ? (
+            <div className="mt-4">
+              <PathEditor
+                officeId={selectedOfficeData.id}
+                officeName={selectedOfficeData.shortName || selectedOfficeData.name}
+                entrance={activeFloorMap.entrance}
+                existingPath={activeFloorMap.paths?.find(p => p.officeId === selectedOfficeData.id)?.points || null}
+                onSavePath={handleSavePath}
+                onClearPath={handleClearPath}
+                mapImageUrl={activeFloorMap.url}
+                viewBoxWidth={VIEWBOX_WIDTH}
+                viewBoxHeight={VIEWBOX_HEIGHT}
+                mapScale={1}
+              />
+            </div>
+          ) : selectedOfficeData && !activeFloorMap?.entrance ? (
+            <div className="p-4 text-sm text-yellow-600 bg-yellow-50 rounded-xl border">
+              ⚠️ Please set an entrance marker before drawing a path.
+            </div>
+          ) : null}
 
           {showAddFloor && (
             <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowAddFloor(false)}>
@@ -607,7 +733,7 @@ export default function AdminMap() {
           ) : (
             <>
               {vrMode === 'upload' ? (
-                <VRMediaManager tour={vrTour} onTourUpdate={handleScenesUploaded} onEnterEditor={handleEnterEditor} />
+                <VRMediaManager tour={vrTour} onTourUpdate={handleTourStateUpdate} onEnterEditor={handleEnterEditor} />
               ) : (
                 <VREditorFullScreen
                   tour={vrTour}

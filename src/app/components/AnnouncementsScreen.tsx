@@ -106,6 +106,13 @@ export default function AnnouncementsScreen() {
                       <p className="text-xs text-gray-500 line-clamp-2">
                         {lang === 'en' ? ann.content : ann.contentFilipino}
                       </p>
+                      {ann.imageUrl && (
+                        <img
+                          src={ann.imageUrl}
+                          alt=""
+                          className="mt-3 w-full h-32 object-cover rounded-xl border border-orange-100"
+                        />
+                      )}
                     </button>
                   ))}
                 </div>
@@ -140,6 +147,13 @@ export default function AnnouncementsScreen() {
                         <p className="text-xs text-gray-500 line-clamp-2">
                           {lang === 'en' ? ann.content : ann.contentFilipino}
                         </p>
+                        {ann.imageUrl && (
+                          <img
+                            src={ann.imageUrl}
+                            alt=""
+                            className="mt-3 w-full h-32 object-cover rounded-xl border border-gray-100"
+                          />
+                        )}
                       </div>
                     </div>
                   );
@@ -166,6 +180,13 @@ export default function AnnouncementsScreen() {
             >
               <X size={20} />
             </button>
+            {selectedAnnouncement.imageUrl && (
+              <img
+                src={selectedAnnouncement.imageUrl}
+                alt="Announcement"
+                className="w-full h-48 object-cover rounded-2xl mb-4 border border-gray-100"
+              />
+            )}
             <span
               className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
                 selectedAnnouncement.urgent
