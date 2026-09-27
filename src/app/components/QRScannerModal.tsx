@@ -44,10 +44,9 @@ export default function QRScannerModal({ open, onClose, onScan }: QRScannerModal
           scanHandledRef.current = true;           // i-lock agad
 
           // Itigil ang scanner (kung tumatakbo pa)
-          if (scanning && scannerRef.current) {
-            try { await scannerRef.current.stop(); } catch {}
-            setScanning(false);
-          }
+          try { await scanner.stop(); } catch {}
+          scannerRef.current = null;
+          setScanning(false);
 
           // Extract officeId (pareho lang)
           let officeId = decodedText;
@@ -81,8 +80,9 @@ export default function QRScannerModal({ open, onClose, onScan }: QRScannerModal
 
     // cleanup kapag nag‑unmount o nag‑close habang nag‑scan
     return () => {
-      if (scannerRef.current && scanning) {
+      if (scannerRef.current) {
         scannerRef.current.stop().catch(() => {});
+        scannerRef.current = null;
         setScanning(false);
       }
     };
@@ -90,8 +90,9 @@ export default function QRScannerModal({ open, onClose, onScan }: QRScannerModal
 
   // ── manual close (X button, Cancel) ──────────────────
   const handleClose = () => {
-    if (scannerRef.current && scanning) {
+    if (scannerRef.current) {
       scannerRef.current.stop().catch(() => {});
+      scannerRef.current = null;
       setScanning(false);
     }
     onClose();

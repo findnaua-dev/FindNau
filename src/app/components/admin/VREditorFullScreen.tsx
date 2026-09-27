@@ -1,16 +1,135 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import * as THREE from 'three';
 import {
   X, ChevronLeft, Save, CheckCircle, AlertCircle, ChevronDown, ChevronUp,
   Info, Navigation, Building2, Circle, Square, Diamond, Hexagon, ArrowUp,
-  Palette, Trash2, Plus, DoorOpen,
+  Palette, Trash2, Plus, DoorOpen, ChevronRight,
 } from 'lucide-react';
 import { VRTour, VRHotspot, VRScene } from '../../../services/vrTourService';
 import { useMapSettingsRealtime, MapFloor } from '../../../services/mapService';
-import EquirectangularViewer from '../EquirectangularViewer';
+import EquirectangularViewer, { EquirectangularViewerHandle } from '../EquirectangularViewer';
 import { SHAPES, HOTSPOT_COLORS, ARROW_DIRECTIONS } from './mapConstants';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
-import ScenePathEditor from './ScenePathEditor';
 
+// ======================= CUSTOM SVG ICONS =======================
+const GeoAltIcon = ({ size = 14, color = 'currentColor' }: { size?: number; color?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} fill={color} viewBox="0 0 16 16">
+    <path d="M12.166 8.94c-.524 1.062-1.234 2.12-1.96 3.07A32 32 0 0 1 8 14.58a32 32 0 0 1-2.206-2.57c-.726-.95-1.436-2.008-1.96-3.07C3.304 7.867 3 6.862 3 6a5 5 0 0 1 10 0c0 .862-.305 1.867-.834 2.94M8 16s6-5.686 6-10A6 6 0 0 0 2 6c0 4.314 6 10 6 10"/>
+    <path d="M8 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4m0 1a3 3 0 1 0 0-6 3 3 0 0 0 0 6"/>
+  </svg>
+);
+
+const BullseyeIcon = ({ size = 14, color = 'currentColor' }: { size?: number; color?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} fill={color} viewBox="0 0 16 16">
+    <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16"/>
+    <path d="M8 13A5 5 0 1 1 8 3a5 5 0 0 1 0 10m0 1A6 6 0 1 0 8 2a6 6 0 0 0 0 12"/>
+    <path d="M8 11a3 3 0 1 1 0-6 3 3 0 0 1 0 4m0 1a4 4 0 1 0 0-8 4 4 0 0 0 0 8"/>
+    <path d="M9.5 8a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/>
+  </svg>
+);
+
+const InfoCircleFillIcon = ({ size = 14, color = 'currentColor' }: { size?: number; color?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} fill={color} viewBox="0 0 16 16">
+    <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16m.93-9.412-1 4.705c-.07.34.029.533.304.533.194 0 .487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703 0-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381 2.29-.287zM8 5.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2"/>
+  </svg>
+);
+
+const DoorOpenIcon = ({ size = 14, color = 'currentColor' }: { size?: number; color?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} fill={color} viewBox="0 0 16 16">
+    <path d="M8.5 10c-.276 0-.5-.448-.5-1s.224-1 .5-1 .5.448.5 1-.224 1-.5 1"/>
+    <path d="M10.828.122A.5.5 0 0 1 11 .5V1h.5A1.5 1.5 0 0 1 13 2.5V15h1.5a.5.5 0 0 1 0 1h-13a.5.5 0 0 1 0-1H3V1.5a.5.5 0 0 1 .43-.495l7-1a.5.5 0 0 1 .398.117M11.5 2H11v13h1V2.5a.5.5 0 0 0-.5-.5M4 1.934V15h6V1.077z"/>
+  </svg>
+);
+
+const TagIcon = ({ size = 14, color = 'currentColor' }: { size?: number; color?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} fill={color} viewBox="0 0 16 16">
+    <path d="M2 1a1 1 0 0 0-1 1v4.586a1 1 0 0 0 .293.707l7 7a1 1 0 0 0 1.414 0l4.586-4.586a1 1 0 0 0 0-1.414l-7-7A1 1 0 0 0 6.586 1H2zm4 3.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/>
+  </svg>
+);
+
+// ✅ Label background color palette (all work well with dark gray text)
+const LABEL_BG_COLORS = [
+  '#fde047', // yellow-300 (default)
+  '#fbbf24', // amber-400
+  '#fb923c', // orange-400
+  '#fca5a5', // red-300
+  '#f9a8d4', // pink-300
+  '#c4b5fd', // violet-300
+  '#93c5fd', // blue-300
+  '#5eead4', // teal-300
+  '#86efac', // green-300
+  '#fef3c7', // amber-100 (cream)
+  '#e5e7eb', // gray-200
+  '#ffffff', // white
+];
+
+const TypeDropdown = ({ value, onChange }: { value: string; onChange: (val: string) => void }) => {
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const types = [
+    { id: 'info', label: 'Info', icon: <InfoCircleFillIcon size={14} />, color: 'text-blue-600' },
+    { id: 'navigation', label: 'Navigation', icon: <GeoAltIcon size={14} />, color: 'text-green-600' },
+    { id: 'entrance', label: 'Entrance', icon: <DoorOpenIcon size={14} />, color: 'text-purple-600' },
+    { id: 'label', label: 'Label', icon: <TagIcon size={14} />, color: 'text-yellow-600' },
+  ];
+
+  const selected = types.find((t) => t.id === value);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between text-xs border rounded-lg px-3 py-1.5 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-400"
+      >
+        <span className="flex items-center gap-1.5">
+          {selected ? (
+            <>
+              <span className={selected.color}>{selected.icon}</span>
+              {selected.label}
+            </>
+          ) : (
+            'Select type'
+          )}
+        </span>
+        <ChevronDown size={14} className="text-gray-400" />
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-full bg-white border rounded-lg shadow-lg py-1">
+          {types.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => {
+                onChange(t.id);
+                setOpen(false);
+              }}
+              className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-gray-100 ${
+                value === t.id ? 'bg-orange-50' : ''
+              }`}
+            >
+              <span className={t.color}>{t.icon}</span>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ======================= MAIN COMPONENT =======================
 interface SceneWithHotspots extends VRScene {
   hotspots: VRHotspot[];
 }
@@ -30,6 +149,37 @@ interface VREditorFullScreenProps {
   onDropScene?: (lon: number, lat: number, sceneId: string) => void;
 }
 
+function projectLatLonToScreen(
+  camera: THREE.Camera,
+  lat: number,
+  lon: number,
+  radius = 9.8
+): { x: number; y: number; depth: number } | null {
+  if (!camera) return null;
+  const phi = THREE.MathUtils.degToRad(90 - lat);
+  const theta = THREE.MathUtils.degToRad(lon);
+  const pos = new THREE.Vector3(
+    radius * Math.sin(theta) * Math.sin(phi),
+    radius * Math.cos(phi),
+    -radius * Math.cos(theta) * Math.sin(phi)
+  );
+  pos.project(camera);
+  return {
+    x: (pos.x * 0.5 + 0.5) * window.innerWidth,
+    y: (-pos.y * 0.5 + 0.5) * window.innerHeight,
+    depth: pos.z,
+  };
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace('#', '').trim();
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const r = parseInt(full.substring(0, 2), 16) || 0;
+  const g = parseInt(full.substring(2, 4), 16) || 0;
+  const b = parseInt(full.substring(4, 6), 16) || 0;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 export default function VREditorFullScreen({
   tour,
   selectedSceneId: propSelectedSceneId,
@@ -45,8 +195,10 @@ export default function VREditorFullScreen({
   const [newHotspotTemp, setNewHotspotTemp] = useState<{ lon: number; lat: number } | null>(null);
   const [selectedHotspotId, setSelectedHotspotId] = useState<string | null>(null);
   const [hotspotLabel, setHotspotLabel] = useState('');
-  const [hotspotType, setHotspotType] = useState<'navigation' | 'office' | 'info' | 'entrance'>('info');
+  const [hotspotType, setHotspotType] = useState<'navigation' | 'info' | 'entrance' | 'label'>('info');
   const [hotspotColor, setHotspotColor] = useState('#F97316');
+  // ✅ NEW: label background color
+  const [hotspotLabelBg, setHotspotLabelBg] = useState('#fde047');
   const [hotspotShape, setHotspotShape] = useState<'circle' | 'square' | 'diamond' | 'hexagon' | 'rounded' | 'arrow'>('circle');
   const [hotspotSize, setHotspotSize] = useState(1);
   const [hotspotDirection, setHotspotDirection] = useState(0);
@@ -60,13 +212,32 @@ export default function VREditorFullScreen({
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [hotspotToDelete, setHotspotToDelete] = useState<string | null>(null);
 
-  // Path editing state – inilipat dito para ma-access ng parent
-  const [editPathMode, setEditPathMode] = useState(false);
-  const [pathOfficeId, setPathOfficeId] = useState<string>('');
-  const [pathPoints, setPathPoints] = useState<{ lon: number; lat: number }[]>([]);
-
-  // Floors from map settings
   const [floors, setFloors] = useState<MapFloor[]>([]);
+
+  const adminViewerRef = useRef<EquirectangularViewerHandle>(null);
+
+  const [labelPositions, setLabelPositions] = useState<
+    {
+      id: string;
+      text: string;
+      x: number;
+      y: number;
+      depth: number;
+      size: number;
+      labelBgColor: string;
+      visible: boolean;
+    }[]
+  >([]);
+  const labelRafRef = useRef<number>(0);
+
+  const [draggingLabel, setDraggingLabel] = useState<{
+    id: string;
+    startX: number;
+    startY: number;
+    startLon: number;
+    startLat: number;
+  } | null>(null);
+  const dragMovedRef = useRef(false);
 
   const scenes = (tour as TourWithScenes)?.scenes || [];
   const currentScene = scenes.find((s) => s.id === localSelectedSceneId);
@@ -77,12 +248,10 @@ export default function VREditorFullScreen({
     scenesRef.current = scenes;
   }, [scenes]);
 
-  // Sync selected scene
   useEffect(() => {
     setLocalSelectedSceneId(propSelectedSceneId);
   }, [propSelectedSceneId]);
 
-  // Fetch floors
   useEffect(() => {
     const unsub = useMapSettingsRealtime((settings) => {
       if (settings.floors?.length) {
@@ -92,18 +261,79 @@ export default function VREditorFullScreen({
     return () => unsub();
   }, []);
 
-  // Reset/load path when scene or office changes
+  const labelHotspots = useMemo(() => {
+    if (!currentScene?.hotspots?.length) return [];
+    return currentScene.hotspots
+      .filter(
+        (h) =>
+          h.type === 'label' &&
+          !!h.label &&
+          h.latitude !== undefined &&
+          h.longitude !== undefined
+      )
+      .map((h) => ({
+        id: h.id || `${h.latitude}-${h.longitude}`,
+        text: h.label,
+        latitude: h.latitude as number,
+        longitude: h.longitude as number,
+        size: h.size || 1,
+        // ✅ Read from hotspot with fallback
+        labelBgColor: (h as any).labelBgColor || '#fde047',
+      }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentScene?.hotspots]);
+
+  const labelHotspotsRef = useRef(labelHotspots);
   useEffect(() => {
-    setSelectedHotspotId(null);
-    setNewHotspotTemp(null);
-    setEditPathMode(false);
-    const scene = scenes.find((s) => s.id === localSelectedSceneId);
-    if (scene && pathOfficeId && scene.officePaths?.[pathOfficeId]) {
-      setPathPoints([...scene.officePaths[pathOfficeId].points]);
-    } else {
-      setPathPoints([]);
-    }
-  }, [localSelectedSceneId, pathOfficeId, scenes]);
+    labelHotspotsRef.current = labelHotspots;
+  }, [labelHotspots]);
+
+  useEffect(() => {
+    const loop = () => {
+      const camera = adminViewerRef.current?.getCamera?.();
+      const latest = labelHotspotsRef.current;
+      if (!camera || latest.length === 0) {
+        setLabelPositions((prev) => (prev.length === 0 ? prev : []));
+        labelRafRef.current = requestAnimationFrame(loop);
+        return;
+      }
+      const result = latest.map((label) => {
+        const proj = projectLatLonToScreen(camera, label.latitude, label.longitude);
+        if (!proj) {
+          return {
+            id: label.id,
+            text: label.text,
+            x: 0,
+            y: 0,
+            depth: 0,
+            size: label.size,
+            labelBgColor: label.labelBgColor,
+            visible: false,
+          };
+        }
+        const inFront = proj.depth < 1 && proj.depth > -1;
+        const onScreen =
+          proj.x > -300 &&
+          proj.x < window.innerWidth + 300 &&
+          proj.y > -200 &&
+          proj.y < window.innerHeight + 200;
+        return {
+          id: label.id,
+          text: label.text,
+          x: proj.x,
+          y: proj.y,
+          depth: proj.depth,
+          size: label.size,
+          labelBgColor: label.labelBgColor,
+          visible: inFront && onScreen,
+        };
+      });
+      setLabelPositions(result);
+      labelRafRef.current = requestAnimationFrame(loop);
+    };
+    labelRafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(labelRafRef.current);
+  }, [currentScene?.id]);
 
   const syncFormFromHotspot = useCallback((hotspot: VRHotspot | undefined) => {
     if (!hotspot) {
@@ -111,8 +341,11 @@ export default function VREditorFullScreen({
       return;
     }
     setHotspotLabel(hotspot.label);
-    setHotspotType(hotspot.type as any);
+    const t = (hotspot.type === 'office' ? 'info' : hotspot.type) as any;
+    setHotspotType(t);
     setHotspotColor(hotspot.color || '#F97316');
+    // ✅ Read label bg from saved hotspot
+    setHotspotLabelBg((hotspot as any).labelBgColor || '#fde047');
     setHotspotShape((hotspot.shape as any) || 'circle');
     setHotspotSize(hotspot.size || 1);
     setHotspotDirection(hotspot.direction || 0);
@@ -140,19 +373,16 @@ export default function VREditorFullScreen({
   };
 
   const handleSphereClick = (lon: number, lat: number) => {
-    if (editPathMode && pathOfficeId) {
-      setPathPoints((prev) => [...prev, { lon, lat }]);
-    } else {
-      setNewHotspotTemp({ lon, lat });
-      setSelectedHotspotId(null);
-      resetHotspotForm();
-    }
+    setNewHotspotTemp({ lon, lat });
+    setSelectedHotspotId(null);
+    resetHotspotForm();
   };
 
   const resetHotspotForm = () => {
     setHotspotLabel('');
     setHotspotType('info');
     setHotspotColor('#F97316');
+    setHotspotLabelBg('#fde047'); // ✅ reset default
     setHotspotShape('circle');
     setHotspotSize(1);
     setHotspotDirection(0);
@@ -162,7 +392,7 @@ export default function VREditorFullScreen({
 
   const confirmNewHotspot = () => {
     if (!newHotspotTemp || !localSelectedSceneId) return;
-    const newHotspot: VRHotspot = {
+    const newHotspot: any = {
       id: Date.now().toString(),
       longitude: newHotspotTemp.lon,
       latitude: newHotspotTemp.lat,
@@ -173,7 +403,9 @@ export default function VREditorFullScreen({
       size: hotspotSize,
       ...(hotspotShape === 'arrow' ? { direction: hotspotDirection } : {}),
       targetSceneId: hotspotType === 'navigation' ? hotspotTargetScene || undefined : undefined,
-      targetOfficeId: hotspotType === 'office' ? hotspotTargetOffice || undefined : undefined,
+      targetOfficeId: hotspotType === 'info' ? hotspotTargetOffice || undefined : undefined,
+      // ✅ Save label bg for label type
+      ...(hotspotType === 'label' ? { labelBgColor: hotspotLabelBg } : {}),
     };
     const updated = scenesRef.current.map((s) =>
       s.id === localSelectedSceneId ? { ...s, hotspots: [...s.hotspots, newHotspot] } : s
@@ -236,42 +468,7 @@ export default function VREditorFullScreen({
     [handleHotspotMove]
   );
 
-  // IMPORTANT: Dito natin ilalagay ang continue feature
   const handleHotspotClick = (hotspot: any) => {
-    if (editPathMode) {
-      // Kapag nag-edit ng path at na-click ang navigation hotspot na may targetSceneId
-      if (hotspot.type === 'navigation' && hotspot.targetSceneId) {
-        // I-save muna ang current path kung may laman at may ≥2 points
-        if (pathOfficeId && currentScene && pathPoints.length >= 2) {
-          const updated = scenesRef.current.map((s) => {
-            if (s.id !== currentScene.id) return s;
-            const officePaths = { ...s.officePaths };
-            officePaths[pathOfficeId] = { points: pathPoints };
-            return { ...s, officePaths };
-          });
-          updateTourLocal(updated);
-        }
-        // Lumipat sa target scene
-        const targetSceneId = hotspot.targetSceneId;
-        setLocalSelectedSceneId(targetSceneId);
-        propOnSelectScene(targetSceneId);
-        // Sa bagong scene, magsimula sa entrance hotspot kung mayroon
-        const targetScene = scenesRef.current.find((s) => s.id === targetSceneId);
-        if (targetScene) {
-          const entrance = targetScene.hotspots.find((h) => h.type === 'entrance');
-          if (entrance) {
-            setPathPoints([{ lon: entrance.longitude, lat: entrance.latitude }]);
-          } else {
-            setPathPoints([]);
-          }
-        }
-        // Panatilihing naka-edit mode at pareho ang office
-        setEditPathMode(true);
-      }
-      return;
-    }
-
-    // Normal mode: i-edit ang hotspot details
     setNewHotspotTemp(null);
     const h = currentScene?.hotspots.find((h) => h.id === hotspot.id);
     setSelectedHotspotId(hotspot.id);
@@ -311,7 +508,6 @@ export default function VREditorFullScreen({
     setDeleteConfirmOpen(false);
   };
 
-  // ==================== DRAG & DROP (IMPROVED) ====================
   const handleDragStart = (e: React.DragEvent, sceneId: string) => {
     setDragSceneId(sceneId);
     setIsDragging(true);
@@ -365,6 +561,68 @@ export default function VREditorFullScreen({
     }
   };
 
+  const handleLabelPointerDown = useCallback(
+    (e: React.MouseEvent | React.TouchEvent, id: string) => {
+      if ('button' in e && e.button !== 0) return;
+      const h = currentScene?.hotspots.find((x) => x.id === id);
+      if (!h || h.latitude === undefined || h.longitude === undefined) return;
+      e.stopPropagation();
+      if ('preventDefault' in e) e.preventDefault();
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+      dragMovedRef.current = false;
+      setDraggingLabel({
+        id,
+        startX: clientX,
+        startY: clientY,
+        startLon: h.longitude,
+        startLat: h.latitude,
+      });
+    },
+    [currentScene]
+  );
+
+  useEffect(() => {
+    if (!draggingLabel) return;
+    const onMove = (e: MouseEvent | TouchEvent) => {
+      const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
+      const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
+      const dx = clientX - draggingLabel.startX;
+      const dy = clientY - draggingLabel.startY;
+      if (!dragMovedRef.current && Math.abs(dx) + Math.abs(dy) < 4) return;
+      dragMovedRef.current = true;
+
+      const dLon = dx * 0.18;
+      const dLat = -dy * 0.18;
+
+      let newLon = draggingLabel.startLon + dLon;
+      let newLat = draggingLabel.startLat + dLat;
+      if (newLon > 180) newLon -= 360;
+      if (newLon < -180) newLon += 360;
+      newLat = Math.max(-85, Math.min(85, newLat));
+
+      handleHotspotMove(draggingLabel.id, newLon, newLat);
+    };
+    const onUp = () => {
+      setDraggingLabel(null);
+      setTimeout(() => {
+        dragMovedRef.current = false;
+      }, 100);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+    window.addEventListener('touchcancel', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+      window.removeEventListener('touchcancel', onUp);
+    };
+  }, [draggingLabel, handleHotspotMove]);
+
   const selectedHotspot = currentScene?.hotspots.find((h) => h.id === selectedHotspotId);
   const overlayStyle = isDragging ? ({ pointerEvents: 'none' } as React.CSSProperties) : {};
 
@@ -378,10 +636,11 @@ export default function VREditorFullScreen({
   };
 
   const typeBadgeMap = {
-    info: { label: 'Info', icon: <Info size={10} />, color: 'bg-blue-100 text-blue-700' },
-    navigation: { label: 'Nav', icon: <Navigation size={10} />, color: 'bg-green-100 text-green-700' },
-    office: { label: 'Office', icon: <Building2 size={10} />, color: 'bg-orange-100 text-orange-700' },
-    entrance: { label: 'Entrance', icon: <DoorOpen size={10} />, color: 'bg-purple-100 text-purple-700' },
+    info: { label: 'Info', icon: <InfoCircleFillIcon size={10} />, color: 'bg-blue-100 text-blue-700' },
+    navigation: { label: 'Nav', icon: <GeoAltIcon size={10} />, color: 'bg-green-100 text-green-700' },
+    office: { label: 'Info', icon: <InfoCircleFillIcon size={10} />, color: 'bg-blue-100 text-blue-700' },
+    entrance: { label: 'Entrance', icon: <DoorOpenIcon size={10} />, color: 'bg-purple-100 text-purple-700' },
+    label: { label: 'Label', icon: <TagIcon size={10} />, color: 'bg-yellow-100 text-yellow-700' },
   };
 
   const officesList = offices || [];
@@ -437,6 +696,7 @@ export default function VREditorFullScreen({
       {/* Viewer area */}
       <div className="flex-1 relative">
         <EquirectangularViewer
+          ref={adminViewerRef}
           key={localSelectedSceneId || 'empty'}
           sceneUrl={currentScene?.url || ''}
           hotspots={currentScene?.hotspots.map((h) => ({
@@ -450,7 +710,7 @@ export default function VREditorFullScreen({
             targetSceneId: h.targetSceneId,
             targetOfficeId: h.targetOfficeId,
             shape: h.shape,
-            size: h.size,
+            size: h.type === 'label' ? 0.01 : h.size,
             direction: h.direction,
           }))}
           enableClickToPlace={true}
@@ -465,12 +725,66 @@ export default function VREditorFullScreen({
           currentIndex={currentIndex}
           totalScenes={scenes.length}
           showNavigationArrows={true}
-          pathPoints={
-            editPathMode
-              ? pathPoints
-              : currentScene?.officePaths?.[pathOfficeId]?.points || null
-          }
         />
+
+        {/* ✅ Label pills — dynamic bg color + draggable + multi-line */}
+        {labelPositions.map((pos) => {
+          if (!pos.visible) return null;
+          const fontPx = Math.max(8, Math.min(48, (pos.size ?? 1) * 16));
+          const paddingY = Math.max(4, Math.round(fontPx * 0.22));
+          const paddingX = Math.max(10, Math.round(fontPx * 0.5));
+          const isSelected = selectedHotspotId === pos.id;
+          const isDraggingThis = draggingLabel?.id === pos.id;
+          const lines = pos.text.split('\n');
+          const bg = pos.labelBgColor || '#fde047';
+          return (
+            <div
+              key={pos.id}
+              className="absolute z-30"
+              style={{
+                left: `${pos.x}px`,
+                top: `${pos.y}px`,
+                transform: 'translate(-50%, -220%)',
+                pointerEvents: 'auto',
+                cursor: isDraggingThis ? 'grabbing' : 'grab',
+                opacity: Math.max(0.6, 0.95 - Math.abs(pos.depth) * 0.4),
+                userSelect: 'none',
+                touchAction: 'none',
+              }}
+              onMouseDown={(e) => handleLabelPointerDown(e, pos.id)}
+              onTouchStart={(e) => handleLabelPointerDown(e, pos.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (dragMovedRef.current) return;
+                const h = currentScene?.hotspots.find((x) => x.id === pos.id);
+                if (h) handleHotspotClick(h);
+              }}
+            >
+              <div
+                className={`backdrop-blur-sm text-gray-900 font-bold rounded-2xl shadow-md transition-all ${
+                  isSelected
+                    ? 'border-2 border-orange-500 ring-2 ring-orange-300'
+                    : 'border border-black/10 hover:border-black/30'
+                }`}
+                style={{
+                  fontSize: `${fontPx}px`,
+                  paddingLeft: `${paddingX}px`,
+                  paddingRight: `${paddingX}px`,
+                  paddingTop: `${paddingY}px`,
+                  paddingBottom: `${paddingY}px`,
+                  lineHeight: 1.25,
+                  backgroundColor: hexToRgba(bg, 0.55),
+                }}
+              >
+                {lines.map((line, idx) => (
+                  <div key={idx} style={{ whiteSpace: 'nowrap' }}>
+                    {line || '\u00A0'}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
 
         {/* Scene info panel */}
         {currentScene && (
@@ -543,24 +857,6 @@ export default function VREditorFullScreen({
           </div>
         )}
 
-        {/* Scene Path Editor (hiwalay na component) */}
-        {currentScene && (
-          <div className="absolute top-14 left-1/2 transform -translate-x-1/2 z-20">
-            <ScenePathEditor
-              tour={tour}
-              currentScene={currentScene}
-              offices={officesList}
-              onTourUpdate={onTourUpdate}
-              activeOfficeId={pathOfficeId}
-              onOfficeChange={setPathOfficeId}
-              activePoints={pathPoints}
-              onPointsChange={setPathPoints}
-              isEditing={editPathMode}
-              onEditModeChange={setEditPathMode}
-            />
-          </div>
-        )}
-
         {/* Hotspot list */}
         {currentScene && (
           <div
@@ -593,9 +889,7 @@ export default function VREditorFullScreen({
                     return (
                       <div
                         key={h.id}
-                        onClick={() => {
-                          if (!editPathMode) handleHotspotClick(h);
-                        }}
+                        onClick={() => handleHotspotClick(h)}
                         className={`flex items-center gap-2 text-xs py-1.5 px-2 rounded cursor-pointer transition-colors ${
                           isSelected ? 'bg-orange-100' : 'hover:bg-gray-100'
                         }`}
@@ -604,7 +898,9 @@ export default function VREditorFullScreen({
                           className="w-3 h-3 rounded-full flex-shrink-0"
                           style={{ backgroundColor: h.color || '#F97316' }}
                         />
-                        <span className="flex-1 truncate font-medium">{h.label}</span>
+                        <span className="flex-1 truncate font-medium">
+                          {h.label.split('\n')[0]}
+                        </span>
                         <span
                           className={`text-[8px] font-semibold px-1.5 py-0.5 rounded flex items-center gap-0.5 ${badge.color}`}
                         >
@@ -613,7 +909,7 @@ export default function VREditorFullScreen({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (!editPathMode) handleDeleteHotspot(h.id);
+                            handleDeleteHotspot(h.id);
                           }}
                           className="text-gray-400 hover:text-red-500 transition-colors"
                         >
@@ -629,7 +925,7 @@ export default function VREditorFullScreen({
         )}
 
         {/* Hotspot editor (bottom left) */}
-        {!editPathMode && (newHotspotTemp || selectedHotspot) && (
+        {(newHotspotTemp || selectedHotspot) && (
           <div
             className="absolute bottom-24 left-4 bg-white/95 backdrop-blur rounded-xl p-4 w-64 shadow-xl z-20 max-h-[55vh] overflow-y-auto border border-gray-200"
             style={overlayStyle}
@@ -646,26 +942,23 @@ export default function VREditorFullScreen({
                   />
                 </div>
                 <div className="space-y-2">
-                  <input
-                    value={hotspotLabel}
-                    onChange={(e) => setHotspotLabel(e.target.value)}
-                    placeholder="Label"
-                    className="w-full text-xs border rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-orange-400 focus:outline-none"
-                  />
-                  <select
-                    value={hotspotType}
-                    onChange={(e) => {
-                      setHotspotType(e.target.value as any);
-                      setHotspotTargetScene('');
-                      setHotspotTargetOffice('');
-                    }}
-                    className="w-full text-xs border rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-white"
-                  >
-                    <option value="info">ℹ️ Info</option>
-                    <option value="navigation">🧭 Navigation</option>
-                    <option value="office">🏢 Office</option>
-                    <option value="entrance">🚪 Entrance</option>
-                  </select>
+                  {hotspotType === 'label' ? (
+                    <textarea
+                      value={hotspotLabel}
+                      onChange={(e) => setHotspotLabel(e.target.value)}
+                      rows={3}
+                      placeholder={'e.g. Comfort Room\nExit, Water Station'}
+                      className="w-full text-xs border rounded-lg px-3 py-1.5 resize-none focus:ring-2 focus:ring-orange-400 focus:outline-none"
+                    />
+                  ) : (
+                    <input
+                      value={hotspotLabel}
+                      onChange={(e) => setHotspotLabel(e.target.value)}
+                      placeholder="Label"
+                      className="w-full text-xs border rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-orange-400 focus:outline-none"
+                    />
+                  )}
+                  <TypeDropdown value={hotspotType} onChange={(val) => setHotspotType(val as any)} />
                   {hotspotType === 'navigation' && (
                     <select
                       value={hotspotTargetScene}
@@ -682,20 +975,28 @@ export default function VREditorFullScreen({
                         ))}
                     </select>
                   )}
-                  {hotspotType === 'office' && (
-                    <select
-                      value={hotspotTargetOffice}
-                      onChange={(e) => setHotspotTargetOffice(e.target.value)}
-                      className="w-full text-xs border rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-white"
-                    >
-                      <option value="">Select office</option>
-                      {offices.map((o: any) => (
-                        <option key={o.id} value={o.id}>
-                          {o.shortName}
-                        </option>
-                      ))}
-                    </select>
+                  {hotspotType === 'info' && (
+                    <>
+                      <div className="bg-blue-50 border border-blue-100 rounded-lg p-2">
+                        <p className="text-[10px] text-blue-700 leading-relaxed">
+                          <InfoCircleFillIcon size={10} color="#1d4ed8" /> Pumili ng opisina — awtomatikong ipapakita ang impormasyon, serbisyo, at proseso nito sa user.
+                        </p>
+                      </div>
+                      <select
+                        value={hotspotTargetOffice}
+                        onChange={(e) => setHotspotTargetOffice(e.target.value)}
+                        className="w-full text-xs border rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-white"
+                      >
+                        <option value="">Select office (required)</option>
+                        {officesList.map((o: any) => (
+                          <option key={o.id} value={o.id}>
+                            {o.name}
+                          </option>
+                        ))}
+                      </select>
+                    </>
                   )}
+                  
                   <div>
                     <label className="text-[10px] text-gray-500 block mb-1">Shape</label>
                     <div className="flex gap-1">
@@ -758,9 +1059,33 @@ export default function VREditorFullScreen({
                       ))}
                     </div>
                   </div>
+
+                  {/* ✅ Label background color picker — only for label type */}
+                  {hotspotType === 'label' && (
+                    <div>
+                      <label className="text-[10px] text-gray-500 block mb-1">Label Background Color</label>
+                      <div className="flex gap-1 flex-wrap">
+                        {LABEL_BG_COLORS.map((c) => (
+                          <button
+                            key={c}
+                            onClick={() => setHotspotLabelBg(c)}
+                            className={`w-6 h-6 rounded-md border-2 transition-all ${
+                              hotspotLabelBg === c
+                                ? 'border-orange-500 scale-110 ring-2 ring-orange-200'
+                                : 'border-gray-300'
+                            }`}
+                            style={{ backgroundColor: c }}
+                            title={c}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <label className="text-[10px] text-gray-500 flex items-center justify-between">
-                      Size <span className="font-medium">{hotspotSize.toFixed(1)}</span>
+                      {hotspotType === 'label' ? 'Font Size' : 'Size'}{' '}
+                      <span className="font-medium">{hotspotSize.toFixed(1)}</span>
                     </label>
                     <input
                       type="range"
@@ -775,7 +1100,10 @@ export default function VREditorFullScreen({
                   <div className="flex gap-2 pt-1">
                     <button
                       onClick={confirmNewHotspot}
-                      disabled={!hotspotLabel.trim()}
+                      disabled={
+                        !hotspotLabel.trim() ||
+                        (hotspotType === 'info' && !hotspotTargetOffice)
+                      }
                       className="flex-1 bg-orange-500 text-white text-xs font-medium py-2 rounded-lg hover:bg-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Add
@@ -804,34 +1132,37 @@ export default function VREditorFullScreen({
                   />
                 </div>
                 <div className="space-y-2">
-                  <input
-                    value={hotspotLabel}
-                    onChange={(e) => handleUpdateHotspot('label', e.target.value)}
-                    className="w-full text-xs border rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-orange-400 focus:outline-none"
-                  />
+                  {hotspotType === 'label' ? (
+                    <textarea
+                      value={selectedHotspot.label}
+                      onChange={(e) => handleUpdateHotspot('label', e.target.value)}
+                      rows={3}
+                      placeholder={'Type text, Enter for new line'}
+                      className="w-full text-xs border rounded-lg px-3 py-1.5 resize-none focus:ring-2 focus:ring-orange-400 focus:outline-none"
+                    />
+                  ) : (
+                    <input
+                      value={selectedHotspot.label}
+                      onChange={(e) => handleUpdateHotspot('label', e.target.value)}
+                      className="w-full text-xs border rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-orange-400 focus:outline-none"
+                    />
+                  )}
                   <textarea
                     value={selectedHotspot.description || ''}
                     onChange={(e) => handleUpdateHotspot('description', e.target.value)}
                     rows={2}
                     className="w-full text-xs border rounded-lg px-3 py-1.5 resize-none focus:ring-2 focus:ring-orange-400 focus:outline-none"
-                    placeholder="Description"
+                    placeholder="Description (optional)"
                   />
-                  <select
+                  <TypeDropdown
                     value={hotspotType}
-                    onChange={(e) => {
-                      const val = e.target.value as any;
-                      setHotspotType(val);
+                    onChange={(val) => {
+                      setHotspotType(val as any);
                       handleUpdateHotspot('type', val);
                       if (val !== 'navigation') handleUpdateHotspot('targetSceneId', undefined);
-                      if (val !== 'office') handleUpdateHotspot('targetOfficeId', undefined);
+                      if (val !== 'info') handleUpdateHotspot('targetOfficeId', undefined);
                     }}
-                    className="w-full text-xs border rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-white"
-                  >
-                    <option value="info">ℹ️ Info</option>
-                    <option value="navigation">🧭 Navigation</option>
-                    <option value="office">🏢 Office</option>
-                    <option value="entrance">🚪 Entrance</option>
-                  </select>
+                  />
                   {hotspotType === 'navigation' && (
                     <select
                       value={selectedHotspot.targetSceneId || ''}
@@ -850,22 +1181,26 @@ export default function VREditorFullScreen({
                         ))}
                     </select>
                   )}
-                  {hotspotType === 'office' && (
-                    <select
-                      value={selectedHotspot.targetOfficeId || ''}
-                      onChange={(e) =>
-                        handleUpdateHotspot('targetOfficeId', e.target.value || undefined)
-                      }
-                      className="w-full text-xs border rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-white"
-                    >
-                      <option value="">Select office</option>
-                      {offices.map((o: any) => (
-                        <option key={o.id} value={o.id}>
-                          {o.shortName}
-                        </option>
-                      ))}
-                    </select>
+                  {hotspotType === 'info' && (
+                    <>
+                      
+                      <select
+                        value={selectedHotspot.targetOfficeId || ''}
+                        onChange={(e) =>
+                          handleUpdateHotspot('targetOfficeId', e.target.value || undefined)
+                        }
+                        className="w-full text-xs border rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-orange-400 focus:outline-none bg-white"
+                      >
+                        <option value="">Select office (required)</option>
+                        {officesList.map((o: any) => (
+                          <option key={o.id} value={o.id}>
+                            {o.name}
+                          </option>
+                        ))}
+                      </select>
+                    </>
                   )}
+                 
                   <div>
                     <label className="text-[10px] text-gray-500 block mb-1">Shape</label>
                     <div className="flex gap-1">
@@ -928,9 +1263,32 @@ export default function VREditorFullScreen({
                       ))}
                     </div>
                   </div>
+
+                  {/* ✅ Label background color picker in Edit form */}
+                  {hotspotType === 'label' && (
+                    <div>
+                      <label className="text-[10px] text-gray-500 block mb-1">Label Background Color</label>
+                      <div className="flex gap-1 flex-wrap">
+                        {LABEL_BG_COLORS.map((c) => (
+                          <button
+                            key={c}
+                            onClick={() => handleUpdateHotspot('labelBgColor', c)}
+                            className={`w-6 h-6 rounded-md border-2 transition-all ${
+                              ((selectedHotspot as any).labelBgColor || '#fde047') === c
+                                ? 'border-orange-500 scale-110 ring-2 ring-orange-200'
+                                : 'border-gray-300'
+                            }`}
+                            style={{ backgroundColor: c }}
+                            title={c}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <label className="text-[10px] text-gray-500 flex items-center justify-between">
-                      Size{' '}
+                      {hotspotType === 'label' ? 'Font Size' : 'Size'}{' '}
                       <span className="font-medium">
                         {(selectedHotspot.size || 1).toFixed(1)}
                       </span>
@@ -983,7 +1341,7 @@ export default function VREditorFullScreen({
                 } ${isDraggingThis ? 'opacity-30 scale-95' : ''} ${
                   isDragOver ? 'border-2 border-dashed border-orange-400' : ''
                 }`}
-                draggable={!newHotspotTemp && !selectedHotspotId && !editPathMode}
+                draggable={!newHotspotTemp && !selectedHotspotId}
                 onDragStart={(e) => handleDragStart(e, scene.id)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => {
@@ -993,7 +1351,7 @@ export default function VREditorFullScreen({
                 onDragLeave={handleDragLeaveItem}
                 onDrop={(e) => handleDropFilmstrip(e, scene.id)}
                 onClick={() => {
-                  if (!isDragging && !newHotspotTemp && !selectedHotspotId && !editPathMode) {
+                  if (!isDragging && !newHotspotTemp && !selectedHotspotId) {
                     setLocalSelectedSceneId(scene.id);
                     propOnSelectScene(scene.id);
                   }

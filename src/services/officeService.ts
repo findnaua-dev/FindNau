@@ -12,6 +12,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebase";
+import { OFFICES } from "../app/data/mockData";
 
 // ---------- Types ----------
 export interface ServiceRequirement {
@@ -22,6 +23,7 @@ export interface ServiceRequirement {
 export interface ServiceStep {
   step: number;
   action: string;
+  clientStep?: string;
   fee: string;
   processingTime: string;
   personResponsible: string;
@@ -58,7 +60,17 @@ export interface Office {
   vrTour: boolean;
   mapX: number;
   mapY: number;
-  vrSceneId?: string; // ✅ NEW: linked 360 scene ID
+  vrSceneId?: string;
+  // Schedule fields (optional)
+  operatingDays?: string;   // e.g., "Monday – Friday"
+  operatingHours?: string;  // e.g., "8:00 AM – 5:00 PM"
+  lunchBreak?: string;      // e.g., "12:00 PM – 1:00 PM"
+  // Booking fields
+  bookingEnabled?: boolean;          // master switch
+  maxVisitorsPerSlot?: number;       // e.g., 1
+  slotDurationMinutes?: number;      // e.g., 30
+  bookingStartTime?: string;         // "08:00"
+  bookingEndTime?: string;           // "17:00"
 }
 
 // ---------- Offices Collection ----------
@@ -68,34 +80,83 @@ const officesRef = collection(db, "offices");
 export function useOfficesRealtime(
   callback: (offices: (Office & { services: Service[] })[]) => void
 ) {
-  return onSnapshot(query(officesRef, orderBy("name")), async (snapshot) => {
-    const offices = await Promise.all(
-      snapshot.docs.map(async (docSnap) => {
-        const officeData = docSnap.data() as Office;
-        const servicesSnap = await getDocs(collection(docSnap.ref, "services"));
-        const services = servicesSnap.docs.map((s) => ({
-          id: s.id,
-          ...s.data(),
-        })) as Service[];
-        return { id: docSnap.id, ...officeData, services };
-      })
-    );
-    callback(offices);
+  const officeData = new Map<string, Office>();
+  const serviceData = new Map<string, Service[]>();
+  const serviceUnsubscribers = new Map<string, () => void>();
+
+  const emit = () => {
+    const offices = Array.from(officeData.entries()).map(([id, office]) => ({
+      id,
+      ...office,
+      services: serviceData.get(id) || [],
+    }));
+    callback(offices.length > 0
+      ? offices
+      : (OFFICES as unknown as (Office & { services: Service[] })[]));
+  };
+
+  const unsubscribeOffices = onSnapshot(query(officesRef, orderBy("name")), (snapshot) => {
+    const activeIds = new Set(snapshot.docs.map((docSnap) => docSnap.id));
+
+    for (const [id, unsubscribe] of serviceUnsubscribers) {
+      if (!activeIds.has(id)) {
+        unsubscribe();
+        serviceUnsubscribers.delete(id);
+        serviceData.delete(id);
+        officeData.delete(id);
+      }
+    }
+
+    snapshot.docs.forEach((docSnap) => {
+      const id = docSnap.id;
+      officeData.set(id, docSnap.data() as Office);
+
+      if (!serviceUnsubscribers.has(id)) {
+        const unsubscribeServices = onSnapshot(collection(docSnap.ref, "services"), (servicesSnapshot) => {
+          serviceData.set(id, servicesSnapshot.docs.map((serviceDoc) => ({
+            id: serviceDoc.id,
+            ...serviceDoc.data(),
+          })) as Service[]);
+          emit();
+        }, (error) => {
+          console.error(`Firestore services unavailable for office ${id}:`, error);
+          serviceData.set(id, []);
+          emit();
+        });
+        serviceUnsubscribers.set(id, unsubscribeServices);
+      }
+    });
+
+    emit();
+  }, (error) => {
+    console.error('Firestore offices listener unavailable, using fallback data:', error);
+    callback(OFFICES as unknown as (Office & { services: Service[] })[]);
   });
+
+  return () => {
+    unsubscribeOffices();
+    serviceUnsubscribers.forEach((unsubscribe) => unsubscribe());
+    serviceUnsubscribers.clear();
+  };
 }
 
 // One-time fetch
 export async function fetchOffices(): Promise<(Office & { services: Service[] })[]> {
-  const snapshot = await getDocs(officesRef);
-  const offices = await Promise.all(
-    snapshot.docs.map(async (docSnap) => {
-      const officeData = docSnap.data() as Office;
-      const servicesSnap = await getDocs(collection(docSnap.ref, "services"));
-      const services = servicesSnap.docs.map((s) => ({ id: s.id, ...s.data() }) as Service);
-      return { id: docSnap.id, ...officeData, services };
-    })
-  );
-  return offices;
+  try {
+    const snapshot = await getDocs(officesRef);
+    const offices = await Promise.all(
+      snapshot.docs.map(async (docSnap) => {
+        const officeData = docSnap.data() as Office;
+        const servicesSnap = await getDocs(collection(docSnap.ref, "services"));
+        const services = servicesSnap.docs.map((s) => ({ id: s.id, ...s.data() }) as Service);
+        return { id: docSnap.id, ...officeData, services };
+      })
+    );
+    return offices.length > 0 ? offices : (OFFICES as unknown as (Office & { services: Service[] })[]);
+  } catch (error) {
+    console.error('Firestore offices unavailable, using fallback data:', error);
+    return OFFICES as unknown as (Office & { services: Service[] })[];
+  }
 }
 
 // Office CRUD

@@ -12,6 +12,7 @@ export const SHAPES = [
   { id: 'arrow', label: 'Arrow', icon: ArrowUp },
 ] as const;
 
+
 export const HOTSPOT_COLORS = [
   '#F97316', '#3B82F6', '#10B981', '#EF4444',
   '#8B5CF6', '#EC4899', '#F59E0B', '#06B6D4',

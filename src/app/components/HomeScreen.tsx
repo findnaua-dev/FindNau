@@ -2,13 +2,37 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Bell, Search, QrCode, Map, Video, Megaphone, HelpCircle,
-  ChevronRight, Briefcase, AlertCircle, Info, Sparkles, X,
+  ChevronRight, Briefcase, AlertCircle, X, PlayCircle,
+  Minimize2, Maximize2,
 } from 'lucide-react';
 import UserScreenLayout from './UserScreenLayout';
-import QRScannerModal from './QRScannerModal';   // ← gamitin natin ang component
+import QRScannerModal from './QRScannerModal';
 import { useApp } from '../context/AppContext';
 import { useOffices } from '../../hooks/useOffices';
 import { useAnnouncements } from '../../hooks/useAnnouncements';
+
+// ── Chat-Bot SVG Icon ─────────────────────────
+function ChatBotIcon({ size = 24, className = '' }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 32 32"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="currentColor"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M16,19a6.9908,6.9908,0,0,1-5.833-3.1287l1.666-1.1074a5.0007,5.0007,0,0,0,8.334,0l1.666,1.1074A6.9908,6.9908,0,0,1,16,19Z" />
+      <path d="M20,8a2,2,0,1,0,2,2A1.9806,1.9806,0,0,0,20,8Z" />
+      <path d="M12,8a2,2,0,1,0,2,2A1.9806,1.9806,0,0,0,12,8Z" />
+      <path d="M17.7358,30,16,29l4-7h6a1.9966,1.9966,0,0,0,2-2V6a1.9966,1.9966,0,0,0-2-2H6A1.9966,1.9966,0,0,0,4,6V20a1.9966,1.9966,0,0,0,2,2h9v2H6a3.9993,3.9993,0,0,1-4-4V6A3.9988,3.9988,0,0,1,6,2H26a3.9988,3.9988,0,0,1,4,4V20a3.9993,3.9993,0,0,1-4,4H21.1646Z" />
+    </svg>
+  );
+}
+
+// ── YouTube video ID (from https://youtu.be/p9Wjk0GtRd4) ──
+const TUTORIAL_VIDEO_ID = 'p9Wjk0GtRd4';
 
 export default function HomeScreen() {
   const navigate = useNavigate();
@@ -28,8 +52,23 @@ export default function HomeScreen() {
     },
   ]);
 
-  const { offices } = useOffices();
-  const { announcements } = useAnnouncements();
+  // ── Floating Video state ──────────────────────
+  const [showVideo, setShowVideo] = useState(false);
+  const [videoMinimized, setVideoMinimized] = useState(false);
+
+  const { offices, loading: officesLoading } = useOffices();
+  const { announcements, loading: announcementsLoading } = useAnnouncements();
+  const syncingOnlineData = officesLoading || announcementsLoading;
+
+  const openTutorial = () => {
+    setShowVideo(true);
+    setVideoMinimized(false);
+  };
+
+  const closeVideo = () => {
+    setShowVideo(false);
+    setVideoMinimized(false);
+  };
 
   // ── mga quick actions ───────────────────
   const quickActions = [
@@ -51,7 +90,7 @@ export default function HomeScreen() {
       )
     : [];
 
-  // ── AI Assistant Logic (unchanged) ──────
+  // ── AI Assistant Logic ──────
   const findBestServiceMatch = (input: string): { service: any; office: any; score: number } | null => {
     const tokens = input
       .toLowerCase()
@@ -82,7 +121,7 @@ export default function HomeScreen() {
         }
       }
     }
-    return bestScore > 0 ? { ...bestMatch, score: bestScore } : null;
+    return bestScore > 0 && bestMatch ? { ...bestMatch, score: bestScore } : null;
   };
 
   const handleAIMessage = () => {
@@ -158,9 +197,16 @@ export default function HomeScreen() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowAI(true)} className="w-9 h-9 rounded-full bg-orange-50 flex items-center justify-center text-orange-500 border border-orange-100">
-              <Sparkles size={16} />
+            {/* Tutorial Video Button — mas maliit */}
+            <button
+              onClick={openTutorial}
+              className="w-7 h-7 rounded-full bg-red-50 flex items-center justify-center text-red-500 border border-red-100 hover:bg-red-100 active:scale-95 transition-all"
+              aria-label={t('Watch Tutorial', 'Panoorin ang Tutorial')}
+              title={t('Watch Tutorial', 'Panoorin ang Tutorial')}
+            >
+              <PlayCircle size={14} />
             </button>
+
             <button onClick={() => navigate('/notifications')} className="w-9 h-9 rounded-full bg-gray-50 flex items-center justify-center text-gray-600 border border-gray-100 relative">
               <Bell size={18} />
               {unreadCount > 0 && (
@@ -184,6 +230,13 @@ export default function HomeScreen() {
           />
         </div>
       </div>
+
+      {syncingOnlineData && (
+        <div className="mx-4 mt-3 flex items-center gap-2 rounded-xl border border-orange-100 bg-orange-50 px-3 py-2 text-xs text-orange-700">
+          <span className="h-3 w-3 animate-spin rounded-full border-2 border-orange-200 border-t-orange-500" />
+          <span>{t('Loading latest data... Your saved system content is ready.', 'Nilo-load ang latest data... Handa ang naka-save na laman ng system.')}</span>
+        </div>
+      )}
 
       {/* Search Results */}
       {searchQuery && (
@@ -213,7 +266,7 @@ export default function HomeScreen() {
         </div>
       )}
 
-      <div className="px-4 space-y-5 mt-4">
+      <div className="px-4 space-y-5 mt-4 pb-28">
         {/* Quick Actions */}
         <div>
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
@@ -236,31 +289,37 @@ export default function HomeScreen() {
           </div>
         </div>
 
-        {/* Urgent Announcement Banner (clickable) */}
+        {/* Urgent Announcement Banner */}
         {urgentAnnouncements.map(ann => (
           <div
             key={ann.id}
             onClick={() => setSelectedAnnouncement(ann)}
-            className="bg-orange-500 rounded-2xl p-4 flex items-start gap-3 cursor-pointer"
+            className="bg-orange-500 rounded-2xl overflow-hidden cursor-pointer shadow-sm"
           >
-            <AlertCircle size={18} className="text-white flex-shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <p className="text-white font-semibold text-sm">{lang === 'en' ? ann.title : ann.titleFilipino}</p>
-              <p className="text-orange-100 text-xs mt-0.5 line-clamp-2">{lang === 'en' ? ann.content : ann.contentFilipino}</p>
+            {ann.imageUrl && (
+              <img src={ann.imageUrl} alt="" className="w-full h-40 object-cover" />
+            )}
+            <div className="p-4 flex items-start gap-3">
+              <AlertCircle size={18} className="text-white flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-white font-semibold text-sm">
+                  {lang === 'en' ? ann.title : ann.titleFilipino}
+                </p>
+                <p className="text-orange-100 text-xs mt-0.5 line-clamp-2">
+                  {lang === 'en' ? ann.content : ann.contentFilipino}
+                </p>
+              </div>
             </div>
           </div>
         ))}
 
-        {/* Announcements (clickable) */}
+        {/* Announcements */}
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
               {t('Announcements', 'Mga Anunsyo')}
             </h3>
-            <button
-              onClick={() => navigate('/announcements')}
-              className="text-xs text-orange-500 font-medium"
-            >
+            <button onClick={() => navigate('/announcements')} className="text-xs text-orange-500 font-medium">
               {t('View all', 'Tingnan lahat')}
             </button>
           </div>
@@ -269,16 +328,25 @@ export default function HomeScreen() {
               <div
                 key={ann.id}
                 onClick={() => setSelectedAnnouncement(ann)}
-                className="bg-white rounded-xl border border-gray-100 p-4 cursor-pointer hover:shadow-sm transition-shadow"
+                className="bg-white rounded-2xl border border-gray-100 overflow-hidden cursor-pointer hover:shadow-sm hover:border-orange-200 transition-all"
               >
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${catColors[ann.category] || 'bg-gray-100 text-gray-500'}`}>
-                    {ann.category}
-                  </span>
-                  <span className="text-[11px] text-gray-400 flex-shrink-0">{ann.date}</span>
+                {ann.imageUrl && (
+                  <img src={ann.imageUrl} alt="" className="w-full h-40 object-cover" />
+                )}
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${catColors[ann.category] || 'bg-gray-100 text-gray-500'}`}>
+                      {ann.category}
+                    </span>
+                    <span className="text-[11px] text-gray-400 flex-shrink-0">{ann.date}</span>
+                  </div>
+                  <p className="text-sm font-medium text-gray-800 mb-1">
+                    {lang === 'en' ? ann.title : ann.titleFilipino}
+                  </p>
+                  <p className="text-xs text-gray-500 line-clamp-2">
+                    {lang === 'en' ? ann.content : ann.contentFilipino}
+                  </p>
                 </div>
-                <p className="text-sm font-medium text-gray-800 mb-1">{lang === 'en' ? ann.title : ann.titleFilipino}</p>
-                <p className="text-xs text-gray-500 line-clamp-2">{lang === 'en' ? ann.content : ann.contentFilipino}</p>
               </div>
             ))}
           </div>
@@ -290,7 +358,9 @@ export default function HomeScreen() {
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
               {t('Municipal Offices', 'Mga Tanggapan')}
             </h3>
-            <button onClick={() => navigate('/services')} className="text-xs text-orange-500 font-medium">{t('View all', 'Tingnan lahat')}</button>
+            <button onClick={() => navigate('/services')} className="text-xs text-orange-500 font-medium">
+              {t('View all', 'Tingnan lahat')}
+            </button>
           </div>
           <div className="grid grid-cols-2 gap-2.5">
             {offices.slice(0, 4).map(office => (
@@ -313,43 +383,137 @@ export default function HomeScreen() {
             ))}
           </div>
         </div>
-
-        {/* Footer info */}
-        <div className="bg-white rounded-xl border border-gray-100 p-4 flex items-center gap-3">
-          <div className="w-8 h-8 bg-orange-50 rounded-lg flex items-center justify-center flex-shrink-0">
-            <Info size={16} className="text-orange-500" />
-          </div>
-          <div>
-            <p className="text-xs font-medium text-gray-700">{t('Municipal Building Hours', 'Oras ng Municipal Building')}</p>
-            <p className="text-xs text-gray-400">{t('Mon–Fri  •  8:00 AM – 5:00 PM', 'Lun–Biy  •  8:00 AM – 5:00 PM')}</p>
-          </div>
-        </div>
       </div>
 
       {/* Announcement Detail Modal */}
       {selectedAnnouncement && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setSelectedAnnouncement(null)}>
-          <div className="bg-white rounded-3xl w-full max-w-md max-h-[80vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
-            <button onClick={() => setSelectedAnnouncement(null)} className="float-right text-gray-400">
-              <X size={20} />
-            </button>
-            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${selectedAnnouncement.urgent ? 'bg-red-50 text-red-500' : 'bg-orange-50 text-orange-500'}`}>
-              {selectedAnnouncement.category}
-            </span>
-            <h2 className="text-lg font-bold mt-2">{lang === 'en' ? selectedAnnouncement.title : selectedAnnouncement.titleFilipino}</h2>
-            <p className="text-xs text-gray-400 mt-1">{selectedAnnouncement.date}</p>
-            <p className="text-sm text-gray-600 mt-4 whitespace-pre-line">{lang === 'en' ? selectedAnnouncement.content : selectedAnnouncement.contentFilipino}</p>
-            <button onClick={() => setSelectedAnnouncement(null)} className="mt-6 w-full bg-gray-100 text-gray-700 py-2.5 rounded-xl text-sm font-medium">Close</button>
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={() => setSelectedAnnouncement(null)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-md max-h-[85vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            {selectedAnnouncement.imageUrl ? (
+              <div className="relative">
+                <img
+                  src={selectedAnnouncement.imageUrl}
+                  alt="Announcement"
+                  className="w-full h-56 object-cover rounded-t-3xl"
+                />
+                <button
+                  onClick={() => setSelectedAnnouncement(null)}
+                  className="absolute top-3 right-3 w-9 h-9 rounded-full bg-black/40 backdrop-blur text-white flex items-center justify-center hover:bg-black/60 transition-colors"
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex justify-end p-4 pb-0">
+                <button
+                  onClick={() => setSelectedAnnouncement(null)}
+                  className="w-9 h-9 rounded-full bg-gray-50 text-gray-500 flex items-center justify-center hover:bg-gray-100"
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            )}
+
+            <div className="p-6 pt-4">
+              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                selectedAnnouncement.urgent
+                  ? 'bg-red-50 text-red-500'
+                  : catColors[selectedAnnouncement.category] || 'bg-gray-100 text-gray-500'
+              }`}>
+                {selectedAnnouncement.category}
+              </span>
+              <h2 className="text-lg font-bold mt-2 leading-tight">
+                {lang === 'en' ? selectedAnnouncement.title : selectedAnnouncement.titleFilipino}
+              </h2>
+              <p className="text-xs text-gray-400 mt-1">{selectedAnnouncement.date}</p>
+              <p className="text-sm text-gray-600 mt-4 whitespace-pre-line leading-relaxed">
+                {lang === 'en' ? selectedAnnouncement.content : selectedAnnouncement.contentFilipino}
+              </p>
+              <button
+                onClick={() => setSelectedAnnouncement(null)}
+                className="mt-6 w-full bg-gray-100 text-gray-700 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-200 transition-colors"
+              >
+                {t('Close', 'Isara')}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* ───── QR Scanner Modal (gamitin ang safe component) ───── */}
+      {/* QR Scanner Modal */}
       <QRScannerModal
         open={showQR}
         onClose={() => setShowQR(false)}
-        // optional: kung may extra logic ka pagkatapos ma-scan, ilagay dito
       />
+
+      {/* ── AI Floating Button (lower + slightly left) ── */}
+      <button
+        onClick={() => setShowAI(true)}
+        className="fixed bottom-16 right-6 z-40 w-14 h-14 rounded-full bg-orange-500 text-white shadow-lg shadow-orange-500/40 flex items-center justify-center hover:bg-orange-600 active:scale-95 transition-all"
+        aria-label={t('AI Assistant', 'AI Assistant')}
+        title={t('AI Assistant', 'AI Assistant')}
+      >
+        <ChatBotIcon size={26} />
+      </button>
+
+      {/* ── FLOATING TUTORIAL VIDEO PLAYER ── */}
+      {showVideo && (
+        <div
+          className={`fixed z-[60] transition-all duration-300 ${
+            videoMinimized
+              ? 'bottom-24 left-4 w-40'
+              : 'bottom-24 left-4 w-[calc(100%-2rem)] max-w-sm sm:w-80'
+          }`}
+        >
+          <div className="bg-black rounded-2xl overflow-hidden shadow-2xl shadow-black/40 border border-black/10">
+            {/* Header bar */}
+            <div className="flex items-center justify-between px-3 py-2 bg-gray-900 text-white">
+              <div className="flex items-center gap-2 min-w-0">
+                <PlayCircle size={14} className="text-red-400 flex-shrink-0" />
+                <span className="text-[11px] font-medium truncate">
+                  {t('App Tutorial', 'Tutorial ng App')}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => setVideoMinimized(v => !v)}
+                  className="w-6 h-6 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors"
+                  aria-label={videoMinimized ? 'Expand' : 'Minimize'}
+                >
+                  {videoMinimized ? <Maximize2 size={12} /> : <Minimize2 size={12} />}
+                </button>
+                <button
+                  onClick={closeVideo}
+                  className="w-6 h-6 rounded-full hover:bg-white/10 flex items-center justify-center transition-colors"
+                  aria-label="Close"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+
+            {/* Video iframe */}
+            <div className="relative w-full bg-black aspect-video">
+              <iframe
+                className="absolute inset-0 w-full h-full"
+                src={`https://www.youtube.com/embed/${TUTORIAL_VIDEO_ID}?autoplay=1&rel=0&modestbranding=1`}
+                title="App Tutorial"
+                frameBorder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* AI Assistant Modal */}
       {showAI && (
@@ -359,21 +523,23 @@ export default function HomeScreen() {
               <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4" />
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center">
-                    <Sparkles size={15} className="text-white" />
+                  <div className="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white">
+                    <ChatBotIcon size={16} />
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-gray-800">FindNau Assistant</p>
                     <p className="text-xs text-green-500 font-medium">● {t('Online', 'Online')}</p>
                   </div>
                 </div>
-                <button onClick={() => setShowAI(false)} className="text-gray-400 hover:text-gray-600 text-sm">{t('Close', 'Isara')}</button>
+                <button onClick={() => setShowAI(false)} className="text-gray-400 hover:text-gray-600 text-sm">
+                  {t('Close', 'Isara')}
+                </button>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
               {aiMessages.map((msg, i) => (
                 <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${
+                  <div className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-line ${
                     msg.role === 'user'
                       ? 'bg-orange-500 text-white rounded-br-sm'
                       : 'bg-gray-100 text-gray-700 rounded-bl-sm'

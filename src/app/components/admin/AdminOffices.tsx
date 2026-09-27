@@ -10,7 +10,7 @@ import {
   addOffice, updateOffice, deleteOffice,
   addService, updateService, deleteService,
 } from '../../../services/officeService';
-import { addNotification } from '../../../services/notificationService';
+import { notifyNewService, notifyOfficeLocationUpdated } from '../../../services/notificationService';
 import { useOffices, OfficeWithServices } from '../../../hooks/useOffices';
 import { useMapSettingsRealtime, MapFloor } from '../../../services/mapService';
 import {
@@ -19,13 +19,11 @@ import {
   VRScene,
   VRHotspot,
 } from '../../../services/vrTourService';
-// ----- direktang Firestore imports (kapalit ng updateBuildingTour) -----
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../../../firebase';
 
-// ---------- Empty initializers ----------
 const emptyReq: ServiceRequirement = { requirement: '', source: '' };
-const emptyStep: ServiceStep = {
+const emptyStep = {
   step: 1,
   clientStep: '',
   action: '',
@@ -34,20 +32,20 @@ const emptyStep: ServiceStep = {
   personResponsible: '',
 };
 
-// ==================== MEMOIZED SERVICE FORM MODAL ====================
 const ServiceFormModal = memo(
   function ServiceFormModal({
     officeId,
+    officeName,
     service,
     onClose,
     onSaved,
   }: {
     officeId: string;
+    officeName: string;
     service: Service | null;
     onClose: () => void;
     onSaved: () => void;
   }) {
-    // --- WALANG BINAGO sa loob ng ServiceFormModal ---
     const init = (s: Service | null) => ({
       name: s?.name || '',
       nameFil: s?.nameFilipino || '',
@@ -106,10 +104,12 @@ const ServiceFormModal = memo(
         requirements: form.reqs.filter(r => r.requirement.trim()),
         requirementsFilipino: form.reqsFil.filter(r => r.requirement.trim()),
         steps: form.steps
-          .filter(s => s.action.trim() || s.clientStep?.trim())
+          .filter(s => String(s.action ?? '').trim() ||
+            ('clientStep' in s && String(s.clientStep ?? '').trim()))
           .map((s, i) => ({ ...s, step: i + 1 })),
         stepsFilipino: form.stepsFil
-          .filter(s => s.action.trim() || s.clientStep?.trim())
+          .filter(s => String(s.action ?? '').trim() ||
+            ('clientStep' in s && String(s.clientStep ?? '').trim()))
           .map((s, i) => ({ ...s, step: i + 1 })),
         processingTime: form.time || 'N/A',
         fee: form.fee || 'Free',
@@ -117,22 +117,13 @@ const ServiceFormModal = memo(
       try {
         if (service?.id) {
           await updateService(officeId, service.id, data);
-          addNotification({
-            title: 'Service Updated',
-            message: `${form.name} has been updated.`,
-            time: new Date().toLocaleString(),
-            read: false,
-            type: 'info',
-          });
         } else {
-          await addService(officeId, data);
-          addNotification({
-            title: 'New Service Added',
-            message: `${form.name} has been added.`,
-            time: new Date().toLocaleString(),
-            read: false,
-            type: 'info',
-          });
+          const newServiceId = await addService(officeId, data);
+          await notifyNewService(
+            form.name,
+            officeName,
+            typeof newServiceId === 'string' ? newServiceId : undefined
+          );
         }
         onSaved();
       } catch (err) {
@@ -164,7 +155,6 @@ const ServiceFormModal = memo(
           </div>
 
           <div className="p-5 space-y-5 max-h-[calc(100vh-10rem)] overflow-y-auto">
-            {/* ======= BASIC FIELDS ======= */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">
@@ -271,7 +261,6 @@ const ServiceFormModal = memo(
               </div>
             </div>
 
-            {/* ======= REQUIREMENTS EN ======= */}
             <SectionWithAdd label="Requirements (EN) | Where to secure" onAdd={() => addReq('reqs')}>
               {form.reqs.map((req, idx) => (
                 <div key={idx} className="flex items-center gap-2 mb-2">
@@ -306,7 +295,6 @@ const ServiceFormModal = memo(
               ))}
             </SectionWithAdd>
 
-            {/* ======= REQUIREMENTS FIL ======= */}
             <SectionWithAdd label="Requirements (Filipino) | Saan kukunin" onAdd={() => addReq('reqsFil')}>
               {form.reqsFil.map((req, idx) => (
                 <div key={idx} className="flex items-center gap-2 mb-2">
@@ -341,16 +329,15 @@ const ServiceFormModal = memo(
               ))}
             </SectionWithAdd>
 
-            {/* ======= CLIENT STEPS EN (5 INPUTS) ======= */}
             <SectionWithAdd label="Client Steps (EN) – Client step | Action unit | Fees | Time | Person" onAdd={() => addStep('steps')}>
               {form.steps.map((st, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-2 mb-2 items-center">
                   <span className="col-span-1 text-xs text-gray-500">{idx + 1}</span>
                   <input
-                    value={st.clientStep}
+                    value={'clientStep' in st ? String(st.clientStep ?? '') : ''}
                     onChange={e => {
                       const copy = [...form.steps];
-                      copy[idx] = { ...copy[idx], clientStep: e.target.value };
+                      copy[idx] = Object.assign(copy[idx], { clientStep: e.target.value });
                       updateField('steps', copy);
                     }}
                     placeholder="Client step"
@@ -407,16 +394,15 @@ const ServiceFormModal = memo(
               ))}
             </SectionWithAdd>
 
-            {/* ======= CLIENT STEPS FIL (5 INPUTS) ======= */}
             <SectionWithAdd label="Client Steps (Filipino) – Hakbang | Bayad | Oras | Tao" onAdd={() => addStep('stepsFil')}>
               {form.stepsFil.map((st, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-2 mb-2 items-center">
                   <span className="col-span-1 text-xs text-gray-500">{idx + 1}</span>
                   <input
-                    value={st.clientStep}
+                    value={'clientStep' in st ? String(st.clientStep ?? '') : ''}
                     onChange={e => {
                       const copy = [...form.stepsFil];
-                      copy[idx] = { ...copy[idx], clientStep: e.target.value };
+                      copy[idx] = Object.assign(copy[idx], { clientStep: e.target.value });
                       updateField('stepsFil', copy);
                     }}
                     placeholder="Client step"
@@ -493,12 +479,12 @@ const ServiceFormModal = memo(
   },
   (prev, next) =>
     prev.officeId === next.officeId &&
+    prev.officeName === next.officeName &&
     prev.service?.id === next.service?.id &&
     prev.onClose === next.onClose &&
     prev.onSaved === next.onSaved
 );
 
-// ==================== Reusable section ====================
 const SectionWithAdd = memo(function SectionWithAdd({
   label,
   onAdd,
@@ -521,7 +507,6 @@ const SectionWithAdd = memo(function SectionWithAdd({
   );
 });
 
-// ==================== OFFICE CARD (MEMOIZED) – may VR badge at assignment modal trigger ====================
 const OfficeCard = memo(function OfficeCard({
   office,
   isExpanded,
@@ -570,7 +555,6 @@ const OfficeCard = memo(function OfficeCard({
           >
             <Edit2 size={14} />
           </button>
-          {/* VR button – opens scene assignment modal */}
           <div className="relative">
             <button
               onClick={() => onOpenVRAssignModal(office.id!)}
@@ -659,7 +643,6 @@ const OfficeCard = memo(function OfficeCard({
   );
 });
 
-// ==================== VR SCENE ASSIGNMENT MODAL ====================
 function VRAssignModal({
   officeId,
   offices,
@@ -675,7 +658,6 @@ function VRAssignModal({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
 
-  // Pre-select scenes that already have an office hotspot for this office
   useEffect(() => {
     const preselected = new Set<string>();
     buildingTour.scenes.forEach(scene => {
@@ -700,11 +682,9 @@ function VRAssignModal({
     if (!buildingTour) return;
     setSaving(true);
     const updatedScenes = buildingTour.scenes.map(scene => {
-      // Remove existing office hotspots for this office
       const otherHotspots = (scene.hotspots || []).filter(
         h => !(h.type === 'office' && h.targetOfficeId === officeId)
       );
-      // If selected, add a new office hotspot
       if (selectedIds.has(scene.id)) {
         const newHotspot: VRHotspot = {
           id: `office-${officeId}-${scene.id}`,
@@ -722,7 +702,6 @@ function VRAssignModal({
     });
 
     try {
-      // ----- DIREKTANG UPDATE SA FIRESTORE (kapalit ng updateBuildingTour) -----
       const tourRef = doc(db, 'vrTours', 'buildingTour');
       await setDoc(tourRef, { ...buildingTour, scenes: updatedScenes }, { merge: true });
       onClose();
@@ -804,7 +783,6 @@ function VRAssignModal({
   );
 }
 
-// ==================== MAIN COMPONENT ====================
 export default function AdminOffices() {
   const navigate = useNavigate();
   const { offices, loading, refetch } = useOffices();
@@ -819,15 +797,25 @@ export default function AdminOffices() {
   const [officeFloorId, setOfficeFloorId] = useState('ground');
   const [officeDesc, setOfficeDesc] = useState('');
   const [officeIconBg, setOfficeIconBg] = useState('#F97316');
+  const [officeDays, setOfficeDays] = useState('Monday – Friday');
+  const [officeHours, setOfficeHours] = useState('8:00 AM – 5:00 PM');
+  const [officeLunch, setOfficeLunch] = useState('12:00 PM – 1:00 PM');
 
-  // Dynamic floors
   const [mapFloors, setMapFloors] = useState<MapFloor[]>([]);
   useEffect(() => {
     const unsub = useMapSettingsRealtime((settings) => {
       if (settings.floors?.length) {
         setMapFloors(settings.floors);
       } else {
-        setMapFloors([{ id: 'ground', label: 'Ground Floor', url: '', width: 800, height: 600 }]);
+        setMapFloors([{
+          id: 'ground',
+          label: 'Ground Floor',
+          url: '',
+          width: 800,
+          height: 600,
+          stairs: { x: 0, y: 0 },
+          connectionPath: null,
+        }]);
       }
     });
     return () => unsub();
@@ -835,21 +823,18 @@ export default function AdminOffices() {
 
   const [serviceModal, setServiceModal] = useState<{ officeId: string; service?: Service } | null>(null);
 
-  // Debounced search
   const [debouncedSearch, setDebouncedSearch] = useState('');
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 300);
     return () => clearTimeout(timer);
   }, [search]);
 
-  // ===== VR DATA =====
   const [buildingTour, setBuildingTour] = useState<VRTour | null>(null);
   useEffect(() => {
     const unsub = useBuildingTourRealtime((data) => setBuildingTour(data));
     return () => unsub();
   }, []);
 
-  // Set of office IDs that have at least one VR hotspot
   const officesWithVR = useMemo(() => {
     const set = new Set<string>();
     if (buildingTour?.scenes) {
@@ -864,7 +849,6 @@ export default function AdminOffices() {
     return set;
   }, [buildingTour]);
 
-  // VR assignment modal
   const [assignVRModalOfficeId, setAssignVRModalOfficeId] = useState<string | null>(null);
 
   const filtered = useMemo(
@@ -883,7 +867,6 @@ export default function AdminOffices() {
     [offices]
   );
 
-  // STABLE CALLBACKS
   const toggleExpand = useCallback((id: string) => setExpandedOffice(prev => (prev === id ? null : id)), []);
 
   const handleEditOffice = useCallback((office: OfficeWithServices) => {
@@ -892,6 +875,9 @@ export default function AdminOffices() {
     setOfficeFloorId(office.floorId || 'ground');
     setOfficeDesc(office.description);
     setOfficeIconBg(office.iconBg);
+    setOfficeDays(office.operatingDays || 'Monday – Friday');
+    setOfficeHours(office.operatingHours || '8:00 AM – 5:00 PM');
+    setOfficeLunch(office.lunchBreak || '12:00 PM – 1:00 PM');
     setEditingOfficeId(office.id);
     setShowAddOffice(true);
   }, []);
@@ -901,13 +887,6 @@ export default function AdminOffices() {
       if (!id) return;
       try {
         await deleteOffice(id);
-        addNotification({
-          title: 'Office Deleted',
-          message: 'An office has been removed.',
-          time: new Date().toLocaleString(),
-          read: false,
-          type: 'alert',
-        });
         setDeleteConfirm(null);
         refetch();
       } catch (err) {
@@ -933,10 +912,26 @@ export default function AdminOffices() {
       vrTour: false,
       mapX: 50,
       mapY: 50,
+      operatingDays: officeDays,
+      operatingHours: officeHours,
+      lunchBreak: officeLunch,
     };
     try {
       if (editingOfficeId) {
+        const oldOffice = offices.find(o => o.id === editingOfficeId);
+        const oldFloorId = oldOffice?.floorId;
+        const newFloorId = officeFloorId;
+        const newFloorLabel = selectedFloor?.label || 'Ground Floor';
+
         await updateOffice(editingOfficeId, data);
+
+        if (oldFloorId && oldFloorId !== newFloorId) {
+          await notifyOfficeLocationUpdated(
+            officeName,
+            newFloorLabel,
+            editingOfficeId
+          );
+        }
       } else {
         await addOffice(data);
       }
@@ -945,11 +940,14 @@ export default function AdminOffices() {
       setOfficeName('');
       setOfficeFloorId('ground');
       setOfficeDesc('');
+      setOfficeDays('Monday – Friday');
+      setOfficeHours('8:00 AM – 5:00 PM');
+      setOfficeLunch('12:00 PM – 1:00 PM');
       refetch();
     } catch (err) {
       console.error(err);
     }
-  }, [officeName, officeFloorId, officeDesc, officeIconBg, editingOfficeId, mapFloors, refetch]);
+  }, [officeName, officeFloorId, officeDesc, officeIconBg, officeDays, officeHours, officeLunch, editingOfficeId, mapFloors, refetch, offices]);
 
   const openServiceModal = useCallback((officeId: string, service?: Service) => {
     setServiceModal({ officeId, service });
@@ -964,13 +962,6 @@ export default function AdminOffices() {
     async (officeId: string, serviceId: string) => {
       try {
         await deleteService(officeId, serviceId);
-        addNotification({
-          title: 'Service Deleted',
-          message: 'A service has been removed.',
-          time: new Date().toLocaleString(),
-          read: false,
-          type: 'alert',
-        });
         refetch();
       } catch (err) {
         console.error(err);
@@ -991,7 +982,6 @@ export default function AdminOffices() {
 
   return (
     <div className="space-y-5 max-w-6xl mx-auto">
-      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-lg font-semibold text-gray-800">Offices & Services</h2>
@@ -1003,6 +993,9 @@ export default function AdminOffices() {
             setOfficeName('');
             setOfficeFloorId('ground');
             setOfficeDesc('');
+            setOfficeDays('Monday – Friday');
+            setOfficeHours('8:00 AM – 5:00 PM');
+            setOfficeLunch('12:00 PM – 1:00 PM');
             setShowAddOffice(true);
           }}
           className="flex items-center gap-2 bg-gray-800 text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-700"
@@ -1011,7 +1004,6 @@ export default function AdminOffices() {
         </button>
       </div>
 
-      {/* Search */}
       <div className="relative max-w-sm">
         <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
         <input
@@ -1022,7 +1014,6 @@ export default function AdminOffices() {
         />
       </div>
 
-      {/* Office list */}
       {filtered.length === 0 ? (
         <div className="text-center py-16 text-gray-400">
           <Building2 size={48} className="mx-auto mb-3 text-gray-200" />
@@ -1053,7 +1044,6 @@ export default function AdminOffices() {
         </div>
       )}
 
-      {/* Add/Edit Office Modal */}
       {showAddOffice && (
         <div
           className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
@@ -1080,7 +1070,6 @@ export default function AdminOffices() {
                 />
               </div>
 
-              {/* Floor dropdown */}
               <div>
                 <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">
                   Floor / Location
@@ -1107,6 +1096,37 @@ export default function AdminOffices() {
                   className="w-full border rounded-lg px-3 py-2.5 text-sm resize-none"
                 />
               </div>
+
+              <div className="grid grid-cols-1 gap-3 pt-1">
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Operating Days</label>
+                  <input
+                    value={officeDays}
+                    onChange={e => setOfficeDays(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="e.g., Monday – Friday"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Operating Hours</label>
+                  <input
+                    value={officeHours}
+                    onChange={e => setOfficeHours(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="e.g., 8:00 AM – 5:00 PM"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Lunch Break</label>
+                  <input
+                    value={officeLunch}
+                    onChange={e => setOfficeLunch(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                    placeholder="e.g., 12:00 PM – 1:00 PM"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Color</label>
                 <input
@@ -1136,7 +1156,6 @@ export default function AdminOffices() {
         </div>
       )}
 
-      {/* Delete Office Confirmation */}
       {deleteConfirm && (
         <div
           className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
@@ -1165,18 +1184,19 @@ export default function AdminOffices() {
         </div>
       )}
 
-      {/* SERVICE FORM MODAL */}
       {serviceModal && (
         <ServiceFormModal
           key={serviceModal.service?.id || 'new'}
           officeId={serviceModal.officeId}
+          officeName={
+            offices.find(o => o.id === serviceModal.officeId)?.name || 'Office'
+          }
           service={serviceModal.service || null}
           onClose={closeServiceModal}
           onSaved={closeServiceModal}
         />
       )}
 
-      {/* ===== VR SCENE ASSIGNMENT MODAL ===== */}
       {assignVRModalOfficeId && buildingTour && (
         <VRAssignModal
           officeId={assignVRModalOfficeId}

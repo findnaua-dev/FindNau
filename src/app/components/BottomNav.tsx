@@ -13,7 +13,7 @@ export default function BottomNav() {
     try {
       await signOut(auth);
       setUser(null);
-      navigate('/');
+      navigate('/login', { replace: true });
     } catch (err) {
       console.error('Logout error:', err);
     }

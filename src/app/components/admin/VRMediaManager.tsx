@@ -1,9 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, X, ArrowRight, CheckCircle, Loader2 } from 'lucide-react';
+import { Upload, X, ArrowRight, CheckCircle, Loader2, AlertCircle } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
-import { VRTour, VRScene } from '../../../services/vrTourService';
+import { VRTour, VRScene, saveBuildingTour } from '../../../services/vrTourService';
 import { useMapSettingsRealtime, MapFloor } from '../../../services/mapService';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+
+// Bootstrap Icons Camera2 SVG
+const CameraIcon = ({ size = 18, color = 'currentColor', className }: { size?: number; color?: string; className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} fill={color} className={className} viewBox="0 0 16 16">
+    <path d="M6.5 1A1.5 1.5 0 0 0 5 2.5V3H3a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2V2.5A1.5 1.5 0 0 0 9.5 1h-3zM6 2.5A.5.5 0 0 1 6.5 2h3a.5.5 0 0 1 .5.5V3H6v-.5zM3 4h10a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/>
+    <path d="M8 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm0 1a2 2 0 1 1 0 4 2 2 0 0 1 0-4z"/>
+  </svg>
+);
 
 interface VRMediaManagerProps {
   tour: VRTour | null;
@@ -11,8 +19,8 @@ interface VRMediaManagerProps {
   onEnterEditor: () => void;
 }
 
-const cloudName = (import.meta as any).env?.VITE_CLOUDINARY_CLOUD_NAME;
-const uploadPreset = (import.meta as any).env?.VITE_CLOUDINARY_UPLOAD_PRESET;
+const cloudName = (import.meta as any).env?.VITE_CLOUDINARY_CLOUD_NAME || 'kyjl86ut';
+const uploadPreset = (import.meta as any).env?.VITE_CLOUDINARY_UPLOAD_PRESET || 'findnau_uploads';
 
 interface UploadTask {
   id: string;
@@ -153,7 +161,7 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
           description: '',
           floorId: selectedFloorId,
           hotspots: [],
-          officePaths: {}, // <-- Initialize empty
+          officePaths: {},
         };
 
         const updatedScenes = [...scenesRef.current, newScene];
@@ -182,6 +190,7 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
               : t
           )
         );
+        return true;
       } catch (err: any) {
         setUploadTasks((prev) =>
           prev.map((t) =>
@@ -190,15 +199,29 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
               : t
           )
         );
+        return false;
       }
     };
 
     const concurrency = 3;
+    const uploadResults: boolean[] = [];
     for (let i = 0; i < tasks.length; i += concurrency) {
-      await Promise.all(tasks.slice(i, i + concurrency).map((task) => uploadSingle(task)));
+      uploadResults.push(...await Promise.all(tasks.slice(i, i + concurrency).map((task) => uploadSingle(task))));
     }
 
-    const hasErrors = uploadTasks.some((t) => t.status === 'error');
+    if (tourRef.current && scenesRef.current.length > 0) {
+      try {
+        await saveBuildingTour({
+          ...tourRef.current,
+          scenes: scenesRef.current,
+        });
+      } catch (err) {
+        console.error('VR scene URLs uploaded but could not be saved to Firebase:', err);
+        setError('Images uploaded, but the virtual tour could not be saved. Check Firebase access and try Save again.');
+      }
+    }
+
+    const hasErrors = uploadResults.some((result) => !result);
     if (hasErrors) {
       setError('Some images failed to upload. Check the list below for details.');
     }
@@ -269,7 +292,10 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
     <div className="space-y-6">
       {/* Upload section */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <h3 className="text-lg font-semibold mb-1">📸 Virtual Tour Media Manager</h3>
+        <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+          <CameraIcon size={20} className="text-gray-700" />
+          Virtual Tour Media Manager
+        </h3>
         <p className="text-sm text-gray-500 mb-4">
           Upload your 360° panoramic images (JPG, PNG – up to 50MB, auto‑compressed).
           <br />
@@ -352,7 +378,7 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
                     {task.status === 'pending' && <span className="text-xs text-gray-400">Queued</span>}
                     {task.status === 'uploading' && <Loader2 size={14} className="animate-spin text-orange-500" />}
                     {task.status === 'done' && <CheckCircle size={14} className="text-green-500" />}
-                    {task.status === 'error' && <X size={14} className="text-red-500" />}
+                    {task.status === 'error' && <AlertCircle size={14} className="text-red-500" />}
                   </div>
                 </div>
                 {task.status === 'error' && task.error && (
@@ -437,7 +463,7 @@ export default function VRMediaManager({ tour, onTourUpdate, onEnterEditor }: VR
       </div>
 
       {/* Bottom actions – STICKY */}
-      <div className="sticky bottom-0 bg-white/90 backdrop-blur-sm border-t border-gray-200 p-4 mt-6 flex justify-end z-10">
+      <div className="sticky bottom-0 p-4 mt-6 flex justify-end z-10">
         <button
           onClick={onEnterEditor}
           disabled={scenes.length === 0}

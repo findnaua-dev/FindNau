@@ -1,5 +1,5 @@
 import { db } from '../firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 
 export interface VRHotspot {
   id?: string;
@@ -40,6 +40,11 @@ export async function saveBuildingTour(tour: VRTour): Promise<void> {
   try {
     const tourRef = doc(db, 'vrTours', VR_TOUR_DOC_ID);
     await setDoc(tourRef, { ...tour, updatedAt: new Date().toISOString() }, { merge: true });
+    const saved = await getDoc(tourRef);
+    const savedScenes = saved.data()?.scenes;
+    if (!saved.exists() || !Array.isArray(savedScenes) || savedScenes.length < tour.scenes.length) {
+      throw new Error('Virtual tour was not confirmed in Firebase.');
+    }
   } catch (error) {
     console.error('Error saving VR tour:', error);
     throw error;

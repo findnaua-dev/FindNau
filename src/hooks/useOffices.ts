@@ -1,27 +1,24 @@
 import { useState, useEffect, useCallback } from "react";
-import { fetchOffices, Office, Service } from "../services/officeService";
+import { useOfficesRealtime, Office, Service } from "../services/officeService";
+import { OFFICES } from "../app/data/mockData";
 
 export type OfficeWithServices = Office & { services: Service[] };
 
-export function useOffices() {
-  const [offices, setOffices] = useState<OfficeWithServices[]>([]);
-  const [loading, setLoading] = useState(true);
+const fallbackOffices: OfficeWithServices[] = OFFICES as unknown as OfficeWithServices[];
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await fetchOffices();
-      setOffices(data);
-    } catch (err) {
-      console.error('Failed to fetch offices:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+export function useOffices() {
+  const [offices, setOffices] = useState<OfficeWithServices[]>(fallbackOffices);
+  const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    setLoading(true);
+    const unsubscribe = useOfficesRealtime((data) => {
+      setOffices(data.length > 0 ? data : fallbackOffices);
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, [refreshKey]);
 
-  return { offices, loading, refetch: fetchData };
+  return { offices, loading, refetch: () => setRefreshKey((key) => key + 1) };
 }

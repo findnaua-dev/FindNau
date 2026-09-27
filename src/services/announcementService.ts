@@ -24,6 +24,9 @@ export function useAnnouncementsRealtime(callback: (items: Announcement[]) => vo
   return onSnapshot(query(coll, orderBy("createdAt", "desc")), (snap) => {
     const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Announcement));
     callback(items);
+  }, (error) => {
+    console.error('Firestore announcements unavailable; keeping local data:', error);
+    callback([]);
   });
 }
 

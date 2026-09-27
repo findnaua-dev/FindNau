@@ -38,6 +38,7 @@ export async function fetchUserData(uid: string): Promise<AppUser | null> {
 
   const data = snap.data();
   return {
+    uid,
     name: data.name || 'User',
     email: data.email || '',
     role: data.role || 'user',

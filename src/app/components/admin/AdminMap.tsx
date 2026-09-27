@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { useOffices } from '../../../hooks/useOffices';
 import { updateOffice } from '../../../services/officeService';
-import { addNotification } from '../../../services/notificationService';
+import { createNotification } from '../../../services/notificationService';
 import { useMapSettingsRealtime, saveMapSettings, MapFloor } from '../../../services/mapService';
 import { useBuildingTourRealtime, saveBuildingTour, VRTour } from '../../../services/vrTourService';
 import ImageUpload from '../ui/ImageUpload';
@@ -14,6 +14,7 @@ import VREditorFullScreen from './VREditorFullScreen';
 import PathEditor from './PathEditor';
 import { SHAPES } from './mapConstants';
 
+// Helper para sa pag-render ng mga marker ng opisina
 const renderMapMarker = (dot: any, isSelected: boolean) => {
   const { x, y, size, color, shape = 'circle' } = dot;
   const s = size;
@@ -58,6 +59,7 @@ export default function AdminMap() {
   const [floorMaps, setFloorMaps] = useState<MapFloor[]>([]);
   const [localDots, setLocalDots] = useState<any[]>([]);
   const [settingEntrance, setSettingEntrance] = useState(false);
+  const [settingStairs, setSettingStairs] = useState(false);
 
   const [vrMode, setVrMode] = useState<'upload' | 'editor'>('upload');
   const [vrTour, setVrTour] = useState<VRTour | null>(null);
@@ -70,7 +72,19 @@ export default function AdminMap() {
       if (settings.floors?.length) {
         setFloorMaps(settings.floors);
       } else {
-        const defaults = [{ id: 'ground', label: 'Ground Floor', url: '', width: 800, height: 600, entrance: undefined, paths: [] }];
+        const defaults = [
+          {
+            id: 'ground',
+            label: 'Ground Floor',
+            url: '',
+            width: 800,
+            height: 600,
+            entrance: undefined,
+            stairs: undefined,
+            paths: [],
+            connectionPath: null,
+          },
+        ];
         setFloorMaps(defaults);
         saveMapSettings({ floors: defaults }).catch(console.error);
       }
@@ -103,19 +117,20 @@ export default function AdminMap() {
   }, [vrTour, selectedSceneId]);
 
   const officesOnFloor = useMemo(
-    () => offices.filter(office => (office.floorId || 'ground') === activeFloor),
+    () => offices.filter((office) => (office.floorId || 'ground') === activeFloor),
     [offices, activeFloor]
   );
 
   useEffect(() => {
     if (officesOnFloor.length > 0) {
       setLocalDots(
-        officesOnFloor.map(office => ({
+        officesOnFloor.map((office) => ({
           id: `dot-${office.id}`,
           officeId: office.id!,
           x: office.mapX ?? 50,
           y: office.mapY ?? 50,
-          label: office.shortName || 'Office',
+          // Buong pangalan ng opisina
+          label: office.name || office.shortName || 'Office',
           color: office.iconBg || '#F97316',
           size: 3,
           shape: (office as any).mapShape || 'circle',
@@ -126,8 +141,93 @@ export default function AdminMap() {
     }
   }, [officesOnFloor]);
 
-  const selectedOfficeData = offices.find(office => office.id === selectedOffice);
-  const activeFloorMap = floorMaps.find(floor => floor.id === activeFloor);
+  // Logic para sa text wrapping at collision avoidance sa mapa
+  const labeledDots = useMemo(() => {
+    const wrapText = (text: string, maxChars: number): string[] => {
+      const words = text.split(' ');
+      const lines: string[] = [];
+      let currentLine = '';
+      words.forEach((word) => {
+        if ((currentLine + ' ' + word).trim().length <= maxChars) {
+          currentLine = (currentLine + ' ' + word).trim();
+        } else {
+          if (currentLine) lines.push(currentLine);
+          currentLine = word;
+        }
+      });
+      if (currentLine) lines.push(currentLine);
+      return lines;
+    };
+
+    const sorted = [...localDots].sort((a, b) => a.y - b.y);
+    const fontSize = 1.4;
+    const lineHeight = fontSize * 1.2;
+    const dotOffsetY = 3;
+    const maxCharsPerLine = 20;
+
+    const placed: { id: string; labelX: number; labelY: number; width: number; height: number }[] = [];
+
+    sorted.forEach((dot) => {
+      const name = dot.label;
+      const lines = wrapText(name, maxCharsPerLine);
+      const maxLineWidth = Math.max(...lines.map((line) => line.length * fontSize * 0.6));
+      const blockWidth = maxLineWidth + 1;
+      const blockHeight = lines.length * lineHeight + 1;
+
+      let labelX = dot.x;
+      let labelY = dot.y + dotOffsetY;
+      let attempts = 0;
+      let overlapping = true;
+
+      while (overlapping && attempts < 30) {
+        overlapping = false;
+        for (const p of placed) {
+          const x1 = p.labelX - p.width / 2;
+          const x2 = p.labelX + p.width / 2;
+          const y1 = p.labelY;
+          const y2 = p.labelY + p.height;
+          const nx1 = labelX - blockWidth / 2;
+          const nx2 = labelX + blockWidth / 2;
+          const ny1 = labelY;
+          const ny2 = labelY + blockHeight;
+
+          if (nx1 < x2 && nx2 > x1 && ny1 < y2 && ny2 > y1) {
+            overlapping = true;
+            labelY += 2;
+            break;
+          }
+        }
+        attempts++;
+      }
+
+      placed.push({
+        id: dot.id,
+        labelX,
+        labelY,
+        width: blockWidth,
+        height: blockHeight,
+      });
+    });
+
+    return sorted.map((dot) => {
+      const placement = placed.find((p) => p.id === dot.id);
+      const name = dot.label;
+      const lines = wrapText(name, maxCharsPerLine);
+      const maxLineWidth = Math.max(...lines.map((line) => line.length * fontSize * 0.6));
+      const blockWidth = maxLineWidth + 1;
+      return {
+        dot,
+        labelX: placement?.labelX ?? dot.x,
+        labelY: placement?.labelY ?? dot.y + dotOffsetY,
+        lines,
+        blockWidth,
+        lineHeight,
+      };
+    });
+  }, [localDots]);
+
+  const selectedOfficeData = offices.find((office) => office.id === selectedOffice);
+  const activeFloorMap = floorMaps.find((floor) => floor.id === activeFloor);
   const imgWidth = activeFloorMap?.width || 800;
   const imgHeight = activeFloorMap?.height || 600;
   const VIEWBOX_WIDTH = 100;
@@ -145,22 +245,23 @@ export default function AdminMap() {
   };
 
   const handleFloorImageUpload = async (url: string) => {
-    const img = new window.Image();
-    img.onload = async () => {
-      const updated = floorMaps.map(floor =>
-        floor.id === activeFloor ? { ...floor, url, width: img.naturalWidth, height: img.naturalHeight } : floor
+    try {
+      const dimensions = await new Promise<{ width: number; height: number }>((resolve) => {
+        const img = new window.Image();
+        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+        img.onerror = () => resolve({ width: 800, height: 600 });
+        img.src = url;
+      });
+      const updated = floorMaps.map((floor) =>
+        floor.id === activeFloor ? { ...floor, url, width: dimensions.width, height: dimensions.height } : floor
       );
-      setFloorMaps(updated);
       await saveMapSettings({ floors: updated });
-      showMessage('Floor plan saved.');
-    };
-    img.onerror = async () => {
-      const updated = floorMaps.map(floor => (floor.id === activeFloor ? { ...floor, url } : floor));
       setFloorMaps(updated);
-      await saveMapSettings({ floors: updated });
-      showMessage('Floor plan saved.');
-    };
-    img.src = url;
+      showMessage('Floor plan uploaded and verified in Firebase.');
+    } catch (error) {
+      console.error('Floor plan Firebase save failed:', error);
+      showMessage('Image uploaded, but Firebase did not confirm the map save.', 'error');
+    }
   };
 
   const handleSaveAll = async () => {
@@ -170,13 +271,11 @@ export default function AdminMap() {
         await updateOffice(dot.officeId, { mapX: dot.x, mapY: dot.y, mapShape: dot.shape } as any);
       }
       await saveMapSettings({ floors: floorMaps });
-      await addNotification({
+      await createNotification({
         title: 'Map Updated',
         message: 'Office locations saved.',
-        time: new Date().toLocaleString(),
-        read: false,
         type: 'info',
-      } as any);
+      });
       showMessage('All changes saved.');
     } catch {
       showMessage('Save failed.', 'error');
@@ -187,7 +286,20 @@ export default function AdminMap() {
   const handleAddFloor = async () => {
     if (!newFloorLabel.trim()) return;
     const floorId = newFloorLabel.toLowerCase().replace(/\s+/g, '-');
-    const updatedFloors = [...floorMaps, { id: floorId, label: newFloorLabel, url: '', width: 800, height: 600, entrance: undefined, paths: [] }];
+    const updatedFloors = [
+      ...floorMaps,
+      {
+        id: floorId,
+        label: newFloorLabel,
+        url: '',
+        width: 800,
+        height: 600,
+        entrance: undefined,
+        stairs: undefined,
+        paths: [],
+        connectionPath: null,
+      },
+    ];
     setFloorMaps(updatedFloors);
     try {
       await saveMapSettings({ floors: updatedFloors });
@@ -202,7 +314,7 @@ export default function AdminMap() {
 
   const handleRemoveFloor = async (floorId: string) => {
     if (floorMaps.length <= 1) return;
-    const updatedFloors = floorMaps.filter(floor => floor.id !== floorId);
+    const updatedFloors = floorMaps.filter((floor) => floor.id !== floorId);
     setFloorMaps(updatedFloors);
     try {
       await saveMapSettings({ floors: updatedFloors });
@@ -225,14 +337,14 @@ export default function AdminMap() {
     const newY = ((event.clientY - rect.top) / rect.height) * effectiveVBHeight;
     const roundedX = Math.round(newX * 10) / 10;
     const roundedY = Math.round(newY * 10) / 10;
-    setLocalDots(prev =>
-      prev.map(dot => (dot.id === draggingDotId ? { ...dot, x: roundedX, y: roundedY } : dot))
+    setLocalDots((prev) =>
+      prev.map((dot) => (dot.id === draggingDotId ? { ...dot, x: roundedX, y: roundedY } : dot))
     );
   };
 
   const handleSvgMouseUp = () => {
     if (draggingDotId) {
-      const dot = localDots.find(d => d.id === draggingDotId);
+      const dot = localDots.find((d) => d.id === draggingDotId);
       if (dot) {
         updateOffice(dot.officeId, { mapX: dot.x, mapY: dot.y }).catch(console.error);
       }
@@ -241,37 +353,41 @@ export default function AdminMap() {
   };
 
   const handleSvgBackgroundClick = (event: React.MouseEvent<SVGSVGElement>) => {
-    if (!settingEntrance || !svgRef.current) return;
+    if (!settingEntrance && !settingStairs) return;
+    if (!svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
     const x = ((event.clientX - rect.left) / rect.width) * effectiveVBWidth;
     const y = ((event.clientY - rect.top) / rect.height) * effectiveVBHeight;
     const roundedX = Math.round(x * 10) / 10;
     const roundedY = Math.round(y * 10) / 10;
-    const updatedFloors = floorMaps.map(floor =>
-      floor.id === activeFloor ? { ...floor, entrance: { x: roundedX, y: roundedY } } : floor
+
+    const property = settingEntrance ? 'entrance' : 'stairs';
+    const updatedFloors = floorMaps.map((floor) =>
+      floor.id === activeFloor ? { ...floor, [property]: { x: roundedX, y: roundedY } } : floor
     );
     setFloorMaps(updatedFloors);
     saveMapSettings({ floors: updatedFloors })
-      .then(() => showMessage('Entrance saved.'))
-      .catch(() => showMessage('Failed to save entrance.', 'error'));
+      .then(() => showMessage(`${settingEntrance ? 'Entrance' : 'Stairs'} saved.`))
+      .catch(() => showMessage(`Failed to save ${settingEntrance ? 'entrance' : 'stairs'}.`, 'error'));
     setSettingEntrance(false);
+    setSettingStairs(false);
   };
 
   const updateDotProperty = (dotId: string, updates: any) => {
-    setLocalDots(prev =>
-      prev.map(dot => (dot.id === dotId ? { ...dot, ...updates } : dot))
+    setLocalDots((prev) =>
+      prev.map((dot) => (dot.id === dotId ? { ...dot, ...updates } : dot))
     );
-    const dot = localDots.find(d => d.id === dotId);
+    const dot = localDots.find((d) => d.id === dotId);
     if (dot) {
       updateOffice(dot.officeId, { ...updates } as any).catch(console.error);
     }
   };
 
   const handleSavePath = async (officeId: string, points: { x: number; y: number }[]) => {
-    const updatedFloors = floorMaps.map(floor => {
+    const updatedFloors = floorMaps.map((floor) => {
       if (floor.id !== activeFloor) return floor;
       const existingPaths = floor.paths || [];
-      const filtered = existingPaths.filter(p => p.officeId !== officeId);
+      const filtered = existingPaths.filter((p) => p.officeId !== officeId);
       return { ...floor, paths: [...filtered, { officeId, points }] };
     });
     setFloorMaps(updatedFloors);
@@ -284,9 +400,9 @@ export default function AdminMap() {
   };
 
   const handleClearPath = async (officeId: string) => {
-    const updatedFloors = floorMaps.map(floor => {
+    const updatedFloors = floorMaps.map((floor) => {
       if (floor.id !== activeFloor) return floor;
-      return { ...floor, paths: (floor.paths || []).filter(p => p.officeId !== officeId) };
+      return { ...floor, paths: (floor.paths || []).filter((p) => p.officeId !== officeId) };
     });
     setFloorMaps(updatedFloors);
     try {
@@ -297,7 +413,35 @@ export default function AdminMap() {
     }
   };
 
-  // ✅ FIX: Hindi na auto-enter pagkatapos ng upload
+  const handleSaveConnectionPath = async (officeId: string, points: { x: number; y: number }[]) => {
+    const updatedFloors = floorMaps.map((floor) => {
+      if (floor.id !== activeFloor) return floor;
+      return { ...floor, connectionPath: points } as unknown as MapFloor;
+    });
+    setFloorMaps(updatedFloors);
+    try {
+      await saveMapSettings({ floors: updatedFloors });
+      showMessage('Connection path saved.');
+    } catch {
+      showMessage('Failed to save connection path.', 'error');
+    }
+  };
+
+  const handleClearConnectionPath = async (officeId: string) => {
+    const updatedFloors = floorMaps.map((floor) => {
+      if (floor.id !== activeFloor) return floor;
+      const { connectionPath, ...rest } = floor;
+      return rest as MapFloor;
+    });
+    setFloorMaps(updatedFloors);
+    try {
+      await saveMapSettings({ floors: updatedFloors });
+      showMessage('Connection path cleared.');
+    } catch {
+      showMessage('Failed to clear connection path.', 'error');
+    }
+  };
+
   const handleTourStateUpdate = (updated: VRTour) => {
     setVrTour(updated);
   };
@@ -333,13 +477,11 @@ export default function AdminMap() {
     try {
       const cleanTour = removeUndefined(JSON.parse(JSON.stringify(vrTour)));
       await saveBuildingTour(cleanTour);
-      await addNotification({
+      await createNotification({
         title: 'VR Tour Updated',
         message: 'Virtual tour saved.',
-        time: new Date().toLocaleString(),
-        read: false,
         type: 'info',
-      } as any);
+      });
       showMessage('VR tour saved.');
     } catch (error) {
       console.error('❌ Save VR Tour error:', error);
@@ -406,16 +548,17 @@ export default function AdminMap() {
       {/* ==================== 2D MAP ==================== */}
       {activeTab === '2d' && (
         <div className="space-y-4">
-          {/* 🧭 STEP-BY-STEP BANNER */}
           <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-sm text-orange-800">
             <p className="font-bold mb-2">Steps para sa paggawa ng path:</p>
             <ol className="list-decimal ml-5 space-y-1">
               <li>Pumili ng <strong>Floor</strong>.</li>
               <li>Mag-upload ng <strong>Floor Plan Image</strong>.</li>
               <li>I-click ang <strong>"Set Entrance"</strong> tapos i-click ang mapa para maglagay ng berdeng entrance dot.</li>
+              <li>I-click ang <strong>"Set Stairs"</strong> tapos i-click ang mapa para maglagay ng hagdanan (purple).</li>
               <li>Pumili ng <strong>Office</strong> (i-click ang dot o pumili sa listahan).</li>
               <li>I-click ang <strong>"Draw Path"</strong> sa ibaba, pagkatapos i-click ang mapa para maglagay ng daanan.</li>
               <li>I-click ang <strong>"Finish"</strong> para ma-save ang path.</li>
+              <li>Para sa connection path (Entrance → Stairs), gamitin ang <strong>"Entrance to Stairs"</strong> editor sa ibaba kapag may entrance at stairs na.</li>
             </ol>
           </div>
 
@@ -437,7 +580,7 @@ export default function AdminMap() {
               </button>
             </div>
             <div className="flex gap-2 flex-wrap">
-              {floorMaps.map(floor => (
+              {floorMaps.map((floor) => (
                 <div key={floor.id} className="relative group">
                   <button
                     onClick={() => setActiveFloor(floor.id)}
@@ -447,7 +590,7 @@ export default function AdminMap() {
                   </button>
                   {floorMaps.length > 1 && (
                     <button
-                      onClick={event => { event.stopPropagation(); handleRemoveFloor(floor.id); }}
+                      onClick={(event) => { event.stopPropagation(); handleRemoveFloor(floor.id); }}
                       className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-100 flex items-center justify-center text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
                       aria-label="Remove floor"
                     >
@@ -466,18 +609,23 @@ export default function AdminMap() {
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                     {activeFloorMap?.label || 'Floor'} — Floor Plan Image
                   </label>
-                  <button
-                    onClick={() => setSettingEntrance(true)}
-                    className={`text-xs font-medium px-2 py-1 rounded ${
-                      settingEntrance ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    Set Entrance
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setSettingEntrance(true); setSettingStairs(false); }}
+                      className={`text-xs font-medium px-2 py-1 rounded ${settingEntrance ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                    >
+                      Set Entrance
+                    </button>
+                    <button
+                      onClick={() => { setSettingStairs(true); setSettingEntrance(false); }}
+                      className={`text-xs font-medium px-2 py-1 rounded ${settingStairs ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                    >
+                      Set Stairs
+                    </button>
+                  </div>
                 </div>
-                {settingEntrance && (
-                  <p className="text-xs text-green-600 mb-2">Click on the map below to place the entrance marker.</p>
-                )}
+                {settingEntrance && <p className="text-xs text-green-600 mb-2">Click on the map below to place the entrance marker.</p>}
+                {settingStairs && <p className="text-xs text-purple-600 mb-2">Click on the map below to place the stairs marker.</p>}
                 <ImageUpload
                   onUpload={handleFloorImageUpload}
                   currentImage={activeFloorMap?.url}
@@ -491,9 +639,9 @@ export default function AdminMap() {
                 <div className="px-4 py-2 border-b flex items-center justify-between bg-gray-50">
                   <span className="text-sm font-medium text-gray-700">Drag office dots to position them</span>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => setMapScale(prev => Math.max(0.5, prev - 0.1))} className="w-7 h-7 rounded bg-white border flex items-center justify-center"><ZoomOut size={14} /></button>
+                    <button onClick={() => setMapScale((prev) => Math.max(0.5, prev - 0.1))} className="w-7 h-7 rounded bg-white border flex items-center justify-center"><ZoomOut size={14} /></button>
                     <span className="text-xs text-gray-500 w-10 text-center">{Math.round(mapScale * 100)}%</span>
-                    <button onClick={() => setMapScale(prev => Math.min(2, prev + 0.1))} className="w-7 h-7 rounded bg-white border flex items-center justify-center"><ZoomIn size={14} /></button>
+                    <button onClick={() => setMapScale((prev) => Math.min(2, prev + 0.1))} className="w-7 h-7 rounded bg-white border flex items-center justify-center"><ZoomIn size={14} /></button>
                   </div>
                 </div>
                 <div className="relative bg-gray-50" style={{ paddingBottom: `${(VIEWBOX_HEIGHT / VIEWBOX_WIDTH) * 100}%` }}>
@@ -504,7 +652,7 @@ export default function AdminMap() {
                     onMouseMove={handleSvgMouseMove}
                     onMouseUp={handleSvgMouseUp}
                     onMouseLeave={handleSvgMouseUp}
-                    onClick={settingEntrance ? handleSvgBackgroundClick : undefined}
+                    onClick={settingEntrance || settingStairs ? handleSvgBackgroundClick : undefined}
                   >
                     {activeFloorMap?.url ? (
                       <image href={activeFloorMap.url} x="0" y="0" width={effectiveVBWidth} height={effectiveVBHeight} />
@@ -516,14 +664,22 @@ export default function AdminMap() {
                     {activeFloorMap?.entrance && (
                       <g>
                         <circle cx={activeFloorMap.entrance.x} cy={activeFloorMap.entrance.y} r={3.5} fill="#10B981" stroke="white" strokeWidth="0.8" />
-                        <text x={activeFloorMap.entrance.x} y={activeFloorMap.entrance.y - 5} textAnchor="middle" fontSize="2.5" fill="#047857" fontWeight="bold">
-                          ENTRANCE
-                        </text>
+                        <text x={activeFloorMap.entrance.x} y={activeFloorMap.entrance.y - 5} textAnchor="middle" fontSize="2.5" fill="#047857" fontWeight="bold">ENTRANCE</text>
                       </g>
                     )}
 
-                    {localDots.map(dot => {
+                    {/* Stairs marker */}
+                    {activeFloorMap?.stairs && (
+                      <g>
+                        <circle cx={activeFloorMap.stairs.x} cy={activeFloorMap.stairs.y} r={3.5} fill="#8B5CF6" stroke="white" strokeWidth="0.8" />
+                        <text x={activeFloorMap.stairs.x} y={activeFloorMap.stairs.y - 5} textAnchor="middle" fontSize="2.5" fill="#6D28D9" fontWeight="bold">STAIRS</text>
+                      </g>
+                    )}
+
+                    {labeledDots.map(({ dot, labelX, labelY, lines, blockWidth, lineHeight }) => {
                       const isSelected = selectedOffice === dot.officeId;
+                      const fontSize = 1.4;
+                      const textWidth = blockWidth;
                       return (
                         <g key={dot.id}>
                           {isSelected && renderMapMarker({ ...dot, size: dot.size + 1.5, color: dot.color }, true)}
@@ -534,17 +690,33 @@ export default function AdminMap() {
                           >
                             {renderMapMarker(dot, isSelected)}
                           </g>
-                          <text
-                            x={dot.x}
-                            y={dot.y + dot.size + 3}
-                            textAnchor="middle"
-                            fontSize={Math.max(1.5, dot.size * 0.7)}
-                            fill="#374151"
-                            fontWeight="600"
+                          
+                          {/* Puti na background para sa text */}
+                          <rect
+                            x={labelX - textWidth / 2 - 0.5}
+                            y={labelY - 1}
+                            width={textWidth + 1}
+                            height={lines.length * lineHeight + 1}
+                            rx={0.5}
+                            fill="white"
+                            opacity="0.85"
                             style={{ pointerEvents: 'none' }}
-                          >
-                            {dot.label}
-                          </text>
+                          />
+                          {/* Mga linya ng buong pangalan */}
+                          {lines.map((line, index) => (
+                            <text
+                              key={index}
+                              x={labelX}
+                              y={labelY + index * lineHeight}
+                              textAnchor="middle"
+                              fontSize={fontSize}
+                              fill="#374151"
+                              fontWeight="600"
+                              style={{ pointerEvents: 'none' }}
+                            >
+                              {line}
+                            </text>
+                          ))}
                         </g>
                       );
                     })}
@@ -559,8 +731,8 @@ export default function AdminMap() {
                   <span className="text-sm font-semibold text-gray-700">Offices on {activeFloorMap?.label || 'this floor'}</span>
                 </div>
                 <div className="max-h-80 overflow-y-auto">
-                  {officesOnFloor.map(office => {
-                    const dot = localDots.find(d => d.officeId === office.id);
+                  {officesOnFloor.map((office) => {
+                    const dot = localDots.find((d) => d.officeId === office.id);
                     return (
                       <div
                         key={office.id}
@@ -571,26 +743,24 @@ export default function AdminMap() {
                           {office.shortName?.charAt(0)}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium truncate">{office.shortName}</p>
-                          {dot && (
-                            <p className="text-[10px] text-gray-400">Position: {dot.x.toFixed(1)}%, {dot.y.toFixed(1)}%</p>
-                          )}
+                          {/* BAGO: Buong pangalan ng opisina */}
+                          <p className="text-xs font-medium truncate">{office.name}</p>
+                          {dot && <p className="text-[10px] text-gray-400">Position: {dot.x.toFixed(1)}%, {dot.y.toFixed(1)}%</p>}
                         </div>
                       </div>
                     );
                   })}
-                  {officesOnFloor.length === 0 && (
-                    <p className="text-xs text-gray-400 p-4 text-center">No offices assigned to this floor.</p>
-                  )}
+                  {officesOnFloor.length === 0 && <p className="text-xs text-gray-400 p-4 text-center">No offices assigned to this floor.</p>}
                 </div>
               </div>
 
               {selectedOfficeData && (() => {
-                const dot = localDots.find(d => d.officeId === selectedOfficeData.id);
+                const dot = localDots.find((d) => d.officeId === selectedOfficeData.id);
                 if (!dot) return null;
                 return (
                   <div className="bg-white rounded-xl border border-gray-200 p-4">
-                    <p className="text-sm font-semibold mb-1">{selectedOfficeData.shortName}</p>
+                    {/* BAGO: Buong pangalan ng opisina sa adjustment panel */}
+                    <p className="text-sm font-semibold mb-1">{selectedOfficeData.name}</p>
                     <p className="text-[10px] text-gray-500 mb-3">Adjust position, size and shape</p>
                     <div className="space-y-2">
                       <div>
@@ -602,13 +772,12 @@ export default function AdminMap() {
                           }}
                           className="w-full border rounded px-2 py-1.5 text-xs bg-white"
                         >
-                          {floorMaps.map(floor => (
+                          {floorMaps.map((floor) => (
                             <option key={floor.id} value={floor.id}>{floor.label}</option>
                           ))}
                         </select>
                       </div>
 
-                      {/* ✅ NEW: VR Scene Assignment Dropdown */}
                       <div>
                         <label className="text-[10px] text-gray-500 block mb-0.5">360° Scene</label>
                         <select
@@ -621,8 +790,8 @@ export default function AdminMap() {
                         >
                           <option value="">None</option>
                           {vrTour?.scenes
-                            ?.filter(scene => scene.floorId === selectedOfficeData.floorId)
-                            .map(scene => (
+                            ?.filter((scene) => scene.floorId === selectedOfficeData.floorId)
+                            .map((scene) => (
                               <option key={scene.id} value={scene.id}>{scene.label}</option>
                             ))}
                         </select>
@@ -630,26 +799,16 @@ export default function AdminMap() {
 
                       <div>
                         <label className="text-[10px] text-gray-500 block mb-0.5">X: {dot.x.toFixed(1)}%</label>
-                        <input
-                          type="range" min="0" max="100" step="0.5"
-                          value={dot.x}
-                          onChange={event => updateDotProperty(dot.id, { x: parseFloat(event.target.value) })}
-                          className="w-full accent-gray-800"
-                        />
+                        <input type="range" min="0" max="100" step="0.5" value={dot.x} onChange={(event) => updateDotProperty(dot.id, { x: parseFloat(event.target.value) })} className="w-full accent-gray-800" />
                       </div>
                       <div>
                         <label className="text-[10px] text-gray-500 block mb-0.5">Y: {dot.y.toFixed(1)}%</label>
-                        <input
-                          type="range" min="0" max="100" step="0.5"
-                          value={dot.y}
-                          onChange={event => updateDotProperty(dot.id, { y: parseFloat(event.target.value) })}
-                          className="w-full accent-gray-800"
-                        />
+                        <input type="range" min="0" max="100" step="0.5" value={dot.y} onChange={(event) => updateDotProperty(dot.id, { y: parseFloat(event.target.value) })} className="w-full accent-gray-800" />
                       </div>
                       <div>
                         <label className="text-[10px] text-gray-500 block mb-1">Shape</label>
                         <div className="flex gap-1">
-                          {SHAPES.map(shape => {
+                          {SHAPES.map((shape) => {
                             const IconComponent = shape.icon;
                             return (
                               <button
@@ -666,12 +825,7 @@ export default function AdminMap() {
                       </div>
                       <div>
                         <label className="text-[10px] text-gray-500 block mb-0.5">Size: {dot.size.toFixed(1)}</label>
-                        <input
-                          type="range" min="1" max="8" step="0.5"
-                          value={dot.size}
-                          onChange={event => updateDotProperty(dot.id, { size: parseFloat(event.target.value) })}
-                          className="w-full accent-gray-800"
-                        />
+                        <input type="range" min="1" max="8" step="0.5" value={dot.size} onChange={(event) => updateDotProperty(dot.id, { size: parseFloat(event.target.value) })} className="w-full accent-gray-800" />
                       </div>
                     </div>
                   </div>
@@ -687,7 +841,7 @@ export default function AdminMap() {
                 officeId={selectedOfficeData.id}
                 officeName={selectedOfficeData.shortName || selectedOfficeData.name}
                 entrance={activeFloorMap.entrance}
-                existingPath={activeFloorMap.paths?.find(p => p.officeId === selectedOfficeData.id)?.points || null}
+                existingPath={activeFloorMap.paths?.find((p) => p.officeId === selectedOfficeData.id)?.points || null}
                 onSavePath={handleSavePath}
                 onClearPath={handleClearPath}
                 mapImageUrl={activeFloorMap.url}
@@ -702,15 +856,33 @@ export default function AdminMap() {
             </div>
           ) : null}
 
+          {/* Connection Path Editor (Entrance -> Stairs) */}
+          {activeFloorMap?.entrance && activeFloorMap?.stairs && (
+            <div className="mt-4">
+              <PathEditor
+                officeId="connection"
+                officeName="Entrance to Stairs"
+                entrance={activeFloorMap.entrance}
+                existingPath={activeFloorMap.connectionPath || null}
+                onSavePath={handleSaveConnectionPath}
+                onClearPath={handleClearConnectionPath}
+                mapImageUrl={activeFloorMap.url}
+                viewBoxWidth={VIEWBOX_WIDTH}
+                viewBoxHeight={VIEWBOX_HEIGHT}
+                mapScale={1}
+              />
+            </div>
+          )}
+
           {showAddFloor && (
             <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowAddFloor(false)}>
-              <div className="bg-white rounded-xl w-full max-w-sm p-6 shadow-xl" onClick={event => event.stopPropagation()}>
+              <div className="bg-white rounded-xl w-full max-w-sm p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
                 <h3 className="text-base font-semibold mb-3">Add New Floor</h3>
                 <input
-                  type="text" value={newFloorLabel} onChange={event => setNewFloorLabel(event.target.value)}
+                  type="text" value={newFloorLabel} onChange={(event) => setNewFloorLabel(event.target.value)}
                   placeholder="e.g., 2nd Floor, Basement"
                   className="w-full border rounded-lg px-3 py-2 text-sm mb-4" autoFocus
-                  onKeyDown={event => event.key === 'Enter' && handleAddFloor()}
+                  onKeyDown={(event) => event.key === 'Enter' && handleAddFloor()}
                 />
                 <div className="flex gap-2">
                   <button onClick={handleAddFloor} className="flex-1 bg-gray-800 text-white py-2 rounded-lg text-sm font-medium hover:bg-gray-700">Add Floor</button>

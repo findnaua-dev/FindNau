@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "1067473881556",
+    "project_id": "findnaufinal",
+    "storage_bucket": "findnaufinal.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1067473881556:android:c8a1d4fef66417b353ee41",
+        "android_client_info": {
+          "package_name": "findnau.com"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1067473881556-ccof1hgjunih4apc7gnek9lrmljb8o93.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCgUBRt5xD9jtCyS1k3tq0A3wx5bzQ-Anc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1067473881556-ccof1hgjunih4apc7gnek9lrmljb8o93.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

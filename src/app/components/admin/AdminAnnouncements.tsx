@@ -9,8 +9,8 @@ import {
   deleteAnnouncement,
   Announcement,
 } from '../../../services/announcementService';
-import { addNotification } from '../../../services/notificationService';
-import ImageUpload from '../ui/ImageUpload'; // <-- import ang Cloudinary ImageUpload
+import { notifyNewAnnouncement } from '../../../services/notificationService';
+import ImageUpload from '../ui/ImageUpload';
 
 const emptyAnnouncement: Announcement = {
   title: '',
@@ -20,7 +20,7 @@ const emptyAnnouncement: Announcement = {
   category: 'Announcement',
   urgent: false,
   date: new Date().toLocaleDateString(),
-  imageUrl: '', // <-- idagdag
+  imageUrl: '',
 };
 
 const categoryOptions = ['Notice', 'Health', 'Announcement', 'Business', 'Tax'];
@@ -49,22 +49,12 @@ export default function AdminAnnouncements() {
       setSaving(true);
       if (editing?.id) {
         await updateAnnouncement(editing.id, form);
-        addNotification({
-          title: 'Announcement Updated',
-          message: `"${form.title}" has been updated.`,
-          time: new Date().toLocaleString(),
-          read: false,
-          type: 'info',
-        });
       } else {
-        await addAnnouncement({ ...form, date: form.date || new Date().toLocaleDateString() });
-        addNotification({
-          title: 'New Announcement',
-          message: `"${form.title}" published.`,
-          time: new Date().toLocaleString(),
-          read: false,
-          type: 'info',
+        const newId = await addAnnouncement({
+          ...form,
+          date: form.date || new Date().toLocaleDateString(),
         });
+        await notifyNewAnnouncement(form.title, typeof newId === 'string' ? newId : undefined);
       }
       setShowForm(false);
       setEditing(null);
@@ -97,7 +87,6 @@ export default function AdminAnnouncements() {
 
   return (
     <div className="space-y-5 max-w-5xl" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold text-gray-800">Announcements</h2>
@@ -115,7 +104,6 @@ export default function AdminAnnouncements() {
         </button>
       </div>
 
-      {/* Search */}
       <div className="relative max-w-sm">
         <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
         <input
@@ -126,7 +114,6 @@ export default function AdminAnnouncements() {
         />
       </div>
 
-      {/* List */}
       <div className="space-y-3">
         {filtered.map(ann => (
           <div key={ann.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
@@ -194,7 +181,6 @@ export default function AdminAnnouncements() {
         )}
       </div>
 
-      {/* Add/Edit Modal */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl shadow-xl max-h-[90vh] overflow-y-auto">
@@ -288,7 +274,6 @@ export default function AdminAnnouncements() {
                 />
               </div>
 
-              {/* Image Upload – Cloudinary */}
               <div>
                 <label className="text-[10px] text-gray-500 uppercase tracking-wide block mb-1">Image</label>
                 <ImageUpload
@@ -321,7 +306,6 @@ export default function AdminAnnouncements() {
         </div>
       )}
 
-      {/* Delete confirmation */}
       {deleteConfirm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl p-6">

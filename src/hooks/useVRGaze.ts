@@ -131,6 +131,8 @@ export function useVRGaze({
     return tex;
   }, []);
 
+  // ✅ FIX: Removed the always-on green radial-gradient halo that was
+  //    bleeding into the stereo seam as a white line.
   const createRingTexture = useCallback((progress = 0, color = '#4ade80', isProcessing = false) => {
     const canvas = document.createElement('canvas');
     canvas.width = 64;
@@ -140,15 +142,6 @@ export function useVRGaze({
 
     const centerX = 32, centerY = 32, radius = 22;
     const startAngle = -Math.PI / 2;
-
-    const grad = ctx.createRadialGradient(32, 32, radius - 6, 32, 32, radius + 6);
-    grad.addColorStop(0, 'rgba(74,222,128,0.05)');
-    grad.addColorStop(0.8, 'rgba(74,222,128,0.15)');
-    grad.addColorStop(1, 'rgba(74,222,128,0)');
-    ctx.beginPath();
-    ctx.arc(32, 32, radius + 6, 0, 2 * Math.PI);
-    ctx.fillStyle = grad;
-    ctx.fill();
 
     if (isProcessing) {
       ctx.beginPath();
@@ -180,14 +173,24 @@ export function useVRGaze({
         ctx.fill();
       }
     }
+    // progress === 0 && !isProcessing → canvas stays fully transparent
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.needsUpdate = true;
     return tex;
   }, []);
 
+  // ✅ FIX: Hide ring when nothing is being dwelt on
   const updateRing = useCallback((progress: number, isProcessing = false) => {
     if (!ringRef.current) return;
+
+    if (progress === 0 && !isProcessing) {
+      ringRef.current.visible = false;
+      return;
+    }
+
+    ringRef.current.visible = true;
+
     const oldTex = ringRef.current.material.map;
     const color = isProcessing ? '#f59e0b' : '#4ade80';
     const tex = createRingTexture(progress, color, isProcessing);
@@ -238,9 +241,9 @@ export function useVRGaze({
       return;
     }
 
-    const camera = viewerRef.current?.getCamera();
-    const scene = viewerRef.current?.getScene();
-    const controls = viewerRef.current?.getControls();
+    const camera = viewerRef.current?.getCamera?.();
+    const scene = viewerRef.current?.getScene?.();
+    const controls = viewerRef.current?.getControls?.();
 
     if (!camera || !scene) return;
 
@@ -254,7 +257,7 @@ export function useVRGaze({
       depthTest: false,
       depthWrite: false,
       transparent: true,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending, // ✅ changed from Additive — reduces seam bleed
     });
     const reticle = new THREE.Sprite(dotMat);
     reticle.renderOrder = 999;
@@ -268,10 +271,11 @@ export function useVRGaze({
       depthTest: false,
       depthWrite: false,
       transparent: true,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending, // ✅ changed from Additive — reduces seam bleed
     });
     const ring = new THREE.Sprite(ringMat);
     ring.renderOrder = 998;
+    ring.visible = false; // ✅ starts hidden — no white line until dwelling
     scene.add(ring);
     ringRef.current = ring;
 
@@ -282,6 +286,7 @@ export function useVRGaze({
 
       if (processingRef.current) {
         if (ringRef.current) {
+          ringRef.current.visible = true;
           ringRef.current.material.rotation += 0.08;
           updateRing(1, true);
         }
@@ -309,10 +314,12 @@ export function useVRGaze({
         const hits = raycaster.intersectObjects(targets, false);
         if (hits.length > 0) {
           hitHotspot = hits[0].object.userData.hotspot;
-          const pos = getHotspotPosition(hitHotspot);
-          if (pos) {
-            const dir = new THREE.Vector3().copy(pos).sub(camPos).normalize();
-            hitAngle = forward.angleTo(dir);
+          if (hitHotspot) {
+            const pos = getHotspotPosition(hitHotspot);
+            if (pos) {
+              const dir = new THREE.Vector3().copy(pos).sub(camPos).normalize();
+              hitAngle = forward.angleTo(dir);
+            }
           }
         }
       }
@@ -354,7 +361,7 @@ export function useVRGaze({
       } else {
         const allObjects: THREE.Object3D[] = [];
         scene.traverse((obj: THREE.Object3D) => {
-          if (obj.isMesh && obj.visible) allObjects.push(obj);
+          if (obj instanceof THREE.Mesh && obj.visible) allObjects.push(obj);
         });
         const sceneHits = raycaster.intersectObjects(allObjects, false);
         reticlePos = sceneHits.length > 0

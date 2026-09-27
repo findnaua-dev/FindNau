@@ -6,7 +6,7 @@ import {
   useImperativeHandle,
 } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 interface HotspotData {
   id?: string;
@@ -183,7 +183,7 @@ const EquirectangularViewer = forwardRef<EquirectangularViewerHandle, ViewerProp
         const controls = controlsRef.current;
         if (!controls) return;
         const rad = THREE.MathUtils.degToRad(degrees);
-        controls.spherical.theta = rad;
+        controls.target.set(Math.sin(rad), 0, -Math.cos(rad));
         controls.update();
         lastEmittedDegRef.current = degrees;
       },

@@ -28,8 +28,8 @@ export default function ImageUpload({
   const [error, setError] = useState('');
   const widgetRef = useRef<any>(null);
 
-  const cloudName = (import.meta as any).env?.VITE_CLOUDINARY_CLOUD_NAME;
-  const uploadPreset = (import.meta as any).env?.VITE_CLOUDINARY_UPLOAD_PRESET;
+  const cloudName = (import.meta as any).env?.VITE_CLOUDINARY_CLOUD_NAME || 'kyjl86ut';
+  const uploadPreset = (import.meta as any).env?.VITE_CLOUDINARY_UPLOAD_PRESET || 'findnau_uploads';
 
   useEffect(() => {
     if (document.querySelector('script[src*="cloudinary"]')) return;

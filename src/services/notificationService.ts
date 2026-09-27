@@ -1,37 +1,125 @@
+import { db } from '../firebase';
 import {
-  collection, doc, getDocs, addDoc, updateDoc, deleteDoc,
-  onSnapshot, query, orderBy, Timestamp,
-} from "firebase/firestore";
-import { db } from "../firebase";
+  collection,
+  addDoc,
+  getDocs,
+  query,
+  orderBy,
+  serverTimestamp,
+  onSnapshot,
+  doc,
+  updateDoc,
+  deleteDoc,
+} from 'firebase/firestore';
+
+export type NotificationType = 'announcement' | 'service' | 'location' | 'info';
 
 export interface Notification {
   id?: string;
+  type: NotificationType;
   title: string;
   message: string;
-  time: string;
   read: boolean;
-  type: 'alert' | 'info' | 'health' | 'business';
-  createdAt?: Timestamp;
+  time: string;
+  createdAt?: any;
+  relatedId?: string;
 }
 
-const coll = collection(db, "notifications");
+export const createNotification = async (
+  data: Omit<Notification, 'id' | 'createdAt' | 'read' | 'time'>
+) => {
+  try {
+    const docRef = await addDoc(collection(db, 'notifications'), {
+      ...data,
+      read: false,
+      time: formatNow(),
+      createdAt: serverTimestamp(),
+    });
+    return docRef.id;
+  } catch (error) {
+    console.error('Error creating notification:', error);
+    throw error;
+  }
+};
 
-export function useNotificationsRealtime(callback: (items: Notification[]) => void) {
-  return onSnapshot(query(coll, orderBy("createdAt", "desc")), (snap) => {
-    const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Notification));
-    callback(items);
+export const notifyNewAnnouncement = async (title: string, announcementId?: string) => {
+  return createNotification({
+    type: 'announcement',
+    title: 'New Announcement',
+    message: title,
+    relatedId: announcementId,
   });
-}
+};
 
-export async function addNotification(item: Notification) {
-  const docRef = await addDoc(coll, { ...item, createdAt: Timestamp.now() });
-  return docRef.id;
-}
+export const notifyNewService = async (serviceName: string, officeName: string, serviceId?: string) => {
+  return createNotification({
+    type: 'service',
+    title: 'New Service Available',
+    message: `${serviceName} is now available at ${officeName}.`,
+    relatedId: serviceId,
+  });
+};
 
-export async function updateNotification(id: string, data: Partial<Notification>) {
-  await updateDoc(doc(db, "notifications", id), data);
-}
+export const notifyOfficeLocationUpdated = async (officeName: string, newFloor: string, officeId?: string) => {
+  return createNotification({
+    type: 'location',
+    title: 'Office Location Updated',
+    message: `${officeName} is now located at ${newFloor}.`,
+    relatedId: officeId,
+  });
+};
 
-export async function deleteNotification(id: string) {
-  await deleteDoc(doc(db, "notifications", id));
-}
+const formatNow = () => {
+  const d = new Date();
+  const diff = 0;
+  return d.toLocaleString();
+};
+
+export const updateNotification = async (
+  id: string,
+  data: Partial<Notification>
+) => {
+  try {
+    await updateDoc(doc(db, 'notifications', id), data);
+  } catch (error) {
+    console.error('Error updating notification:', error);
+    throw error;
+  }
+};
+
+export const deleteNotification = async (id: string) => {
+  try {
+    await deleteDoc(doc(db, 'notifications', id));
+  } catch (error) {
+    console.error('Error deleting notification:', error);
+    throw error;
+  }
+};
+
+export const getAllNotifications = async (): Promise<Notification[]> => {
+  try {
+    const q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Notification));
+  } catch (error) {
+    console.error('Error fetching notifications:', error);
+    return [];
+  }
+};
+
+export const useNotificationsRealtime = (
+  callback: (notifications: Notification[]) => void
+) => {
+  const q = query(collection(db, 'notifications'), orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Notification));
+      callback(list);
+    },
+    (err) => {
+      console.error('Error subscribing to notifications:', err);
+      callback([]);
+    }
+  );
+};

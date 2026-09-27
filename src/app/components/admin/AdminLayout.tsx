@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router';
 import {
   LayoutDashboard, Briefcase, Map, QrCode, BarChart3, Users,
-  Menu, Bell, LogOut, Shield, Megaphone, MessageCircleQuestion,
+  Menu, LogOut, Shield, Megaphone, MessageCircleQuestion, Settings,
+  MessageSquare,
 } from 'lucide-react';
 import { signOut } from 'firebase/auth';
 import { auth } from '../../../firebase';
@@ -13,9 +14,11 @@ const navItems = [
   { icon: Briefcase, label: 'Offices & Services', path: '/admin/offices' },
   { icon: Megaphone, label: 'Announcements', path: '/admin/announcements' },
   { icon: MessageCircleQuestion, label: 'FAQs', path: '/admin/faqs' },
+  { icon: MessageSquare, label: 'Feedbacks', path: '/admin/feedbacks' },
   { icon: Map, label: 'Map & Virtual Tour', path: '/admin/map' },
   { icon: QrCode, label: 'QR Code Manager', path: '/admin/qr' },
   { icon: BarChart3, label: 'Reports', path: '/admin/reports' },
+  { icon: Settings, label: 'Help Center', path: '/admin/help-settings' },
 ];
 
 function SidebarContent({
@@ -63,7 +66,7 @@ function SidebarContent({
       </div>
 
       {/* Nav Items */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-widest px-3 mb-2">Management</p>
         {navItems.map(item => {
           const Icon = item.icon;
@@ -129,7 +132,7 @@ export default function AdminLayout() {
     try {
       await signOut(auth);
       setUser(null);
-      navigate('/');
+      navigate('/login', { replace: true });
     } catch (err) {
       console.error('Admin logout error:', err);
     }
@@ -191,15 +194,6 @@ export default function AdminLayout() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleNavigate('/admin/notifications')}
-              className="w-9 h-9 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-600 relative hover:bg-gray-100"
-              aria-label="Notifications"
-              title="Notifications"
-            >
-              <Bell size={17} />
-              <div className="absolute top-1.5 right-1.5 w-2 h-2 bg-orange-500 rounded-full" />
-            </button>
             <div className="w-9 h-9 bg-orange-500 rounded-xl flex items-center justify-center text-white text-sm font-bold">
               {user?.name?.charAt(0) || 'A'}
             </div>

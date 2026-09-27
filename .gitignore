@@ -67,4 +67,46 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
-".env" 
+
+# ===== MIGRATION / SENSITIVE FILES =====
+# Environment files (lahat ng variants)
+.env
+.env.*
+!.env.example
+
+# Firebase service account (SENSITIVE — NEVER commit)
+serviceAccountKey.json
+*-firebase-adminsdk-*.json
+firebase-service-account.json
+
+# Migration outputs
+uploaded-urls.json
+old-urls.json
+migrated-*.json
+
+# Migration scripts (kung ayaw mong i-commit — optional)
+migrate-images.js
+update-firestore.js
+download-old-images.js
+list-old-urls.js
+
+# Local image folders (malalaki — hindi dapat i-commit)
+vr-images/
+downloaded-images/
+compressed/
+images-backup/
+
+# Cloudinary credentials (extra safety)
+cloudinary-credentials.json
+.env.migration
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo

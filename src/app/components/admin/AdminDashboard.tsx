@@ -10,12 +10,54 @@ import { useOffices } from '../../../hooks/useOffices';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { Notification } from '../../../services/notificationService';
 import { useState, useEffect, useMemo, memo } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../../../firebase';
 
 const deepEqual = (a: any, b: any): boolean => {
   if (a === b) return true;
   return JSON.stringify(a) === JSON.stringify(b);
+};
+
+// Custom Tooltip para sa Services Bar Chart
+const ServicesBarTooltip = ({ active, payload }: any) => {
+  if (!active || !payload || !payload.length) return null;
+  const data = payload[0].payload;
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl shadow-lg p-2 text-xs">
+      <p className="font-semibold text-gray-800">{data.fullName}</p>
+      <p className="text-gray-500 mt-1">
+        Services: <span className="font-bold text-orange-500">{data.count}</span>
+      </p>
+    </div>
+  );
+};
+
+// Custom Tooltip para sa Pie Chart
+const PieTooltip = ({ active, payload }: any) => {
+  if (!active || !payload || !payload.length) return null;
+  const data = payload[0].payload;
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl shadow-lg p-2 text-xs">
+      <p className="font-semibold text-gray-800">{data.fullName}</p>
+      <p className="text-gray-500 mt-1">
+        Services: <span className="font-bold text-orange-500">{data.count}</span>
+      </p>
+    </div>
+  );
+};
+
+// Custom Tooltip para sa Visits Bar Chart
+const VisitsBarTooltip = ({ active, payload }: any) => {
+  if (!active || !payload || !payload.length) return null;
+  const data = payload[0].payload;
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl shadow-lg p-2 text-xs">
+      <p className="font-semibold text-gray-800">{data.fullName}</p>
+      <p className="text-gray-500 mt-1">
+        Visits: <span className="font-bold text-blue-600">{data.visits}</span>
+      </p>
+    </div>
+  );
 };
 
 const ServicesBarChart = memo(
@@ -27,7 +69,7 @@ const ServicesBarChart = memo(
             <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
             <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
             <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
-            <Tooltip contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', fontSize: 12 }} />
+            <Tooltip content={<ServicesBarTooltip />} />
             <Bar dataKey="count" fill="#F97316" radius={[6, 6, 0, 0]} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>
@@ -62,7 +104,7 @@ const ServicePieChart = memo(
                     <Cell key={`cell-${index}`} fill={entry.fill || COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', fontSize: 12 }} />
+                <Tooltip content={<PieTooltip />} />
               </PieChart>
             </ResponsiveContainer>
           ) : (
@@ -72,7 +114,7 @@ const ServicePieChart = memo(
         <div className="mt-3 max-h-32 overflow-y-auto">
           <div className="grid grid-cols-2 gap-1.5">
             {data.map((item, i) => (
-              <div key={i} className="flex items-center gap-1.5">
+              <div key={i} className="flex items-center gap-1.5" title={item.fullName}>
                 <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: item.fill }} />
                 <p className="text-[11px] text-gray-600 truncate">{item.name}</p>
                 <p className="text-[11px] font-semibold text-gray-800 ml-auto">{item.count}</p>
@@ -94,7 +136,7 @@ const VisitsBarChart = memo(
           <BarChart data={data} layout="vertical" margin={{ top: 0, right: 20, left: 20, bottom: 0 }}>
             <XAxis type="number" tick={{ fontSize: 11, fill: '#9CA3AF' }} axisLine={false} tickLine={false} />
             <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: '#374151' }} axisLine={false} tickLine={false} width={80} />
-            <Tooltip contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', fontSize: 12 }} />
+            <Tooltip content={<VisitsBarTooltip />} />
             <Bar dataKey="visits" fill="#1D4ED8" radius={[0, 6, 6, 0]} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>
@@ -143,45 +185,70 @@ export default function AdminDashboard() {
 
   const [totalUsers, setTotalUsers] = useState(0);
   const [totalQRScans, setTotalQRScans] = useState(0);
+  const [qrScansData, setQrScansData] = useState<any[]>([]);
   const [statsLoading, setStatsLoading] = useState(true);
 
+  // Real-time listeners para sa users at qrScans
   useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const usersSnap = await getDocs(collection(db, 'users'));
-        setTotalUsers(usersSnap.size);
-        const scansSnap = await getDocs(collection(db, 'qrScans'));
-        setTotalQRScans(scansSnap.size);
-      } catch (err) {
-        console.warn('Stats fetch failed:', err);
-      } finally {
-        setStatsLoading(false);
-      }
+    setStatsLoading(true);
+
+    const usersRef = collection(db, 'users');
+    const qrScansRef = collection(db, 'qrScans');
+
+    const unsubscribeUsers = onSnapshot(usersRef, (snapshot) => {
+      setTotalUsers(snapshot.size);
+      setStatsLoading(false);
+    }, (error) => {
+      console.warn('Users snapshot error:', error);
+      setStatsLoading(false);
+    });
+
+    const unsubscribeQR = onSnapshot(qrScansRef, (snapshot) => {
+      const scans = snapshot.docs.map(doc => doc.data());
+      setQrScansData(scans);
+      setTotalQRScans(snapshot.size);
+      setStatsLoading(false);
+    }, (error) => {
+      console.warn('QR scans snapshot error:', error);
+      setStatsLoading(false);
+    });
+
+    return () => {
+      unsubscribeUsers();
+      unsubscribeQR();
     };
-    fetchStats();
   }, []);
 
   const totalOffices = offices.length;
   const totalServices = offices.reduce((sum, o) => sum + o.services.length, 0);
 
+  // Data para sa Services per Office at Service Distribution (may fullName para sa tooltip)
   const allOfficesData = useMemo(
     () =>
       offices.map((o) => ({
-        name: o.shortName,
+        name: o.shortName, // display sa chart (acronym)
+        fullName: o.name,  // full name para sa tooltip
         count: o.services.length,
         fill: o.iconBg || '#F97316',
       })),
     [offices]
   );
 
-  const allOfficesVisits = useMemo(
-    () =>
-      offices.map((o) => ({
-        name: o.shortName,
-        visits: 0,
-      })),
-    [offices]
-  );
+  // Compute visits per office mula sa qrScansData
+  const allOfficesVisits = useMemo(() => {
+    const visitCounts: Record<string, number> = {};
+    qrScansData.forEach(scan => {
+      const officeId = scan.officeId || scan.officeID || scan.office || scan.targetOfficeId;
+      if (officeId) {
+        visitCounts[officeId] = (visitCounts[officeId] || 0) + 1;
+      }
+    });
+    return offices.map(o => ({
+      name: o.shortName,
+      fullName: o.name,
+      visits: visitCounts[o.id!] || 0,
+    }));
+  }, [offices, qrScansData]);
 
   if (officesLoading || statsLoading) {
     return (
@@ -244,8 +311,8 @@ export default function AdminDashboard() {
       <div className="bg-white rounded-2xl border border-gray-100 p-4">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-sm font-semibold text-gray-800">Office Visits (Simulated)</h3>
-            <p className="text-xs text-gray-400">Placeholder data</p>
+            <h3 className="text-sm font-semibold text-gray-800">Office Visits</h3>
+            <p className="text-xs text-gray-400">Real‑time QR scan counts</p>
           </div>
         </div>
         <VisitsBarChart data={allOfficesVisits} />
@@ -273,26 +340,6 @@ export default function AdminDashboard() {
               </div>
             ))
           )}
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl border border-gray-100 p-4">
-        <h3 className="text-sm font-semibold text-gray-800 mb-3">Quick Actions</h3>
-        <div className="space-y-2">
-          {[
-            { label: 'Manage Offices & Services', path: '/admin/offices', color: 'text-blue-600 bg-blue-50' },
-            { label: 'Manage Announcements', path: '/admin/announcements', color: 'text-purple-600 bg-purple-50' },
-            { label: 'View Reports', path: '/admin/reports', color: 'text-green-600 bg-green-50' },
-            { label: 'Map & Tour Settings', path: '/admin/map', color: 'text-orange-600 bg-orange-50' },
-          ].map((action, i) => (
-            <button key={i} onClick={() => navigate(action.path)} className="w-full flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100 hover:border-orange-200 hover:bg-orange-50 transition-all text-left group">
-              <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${action.color}`}>
-                {i + 1}
-              </div>
-              <p className="flex-1 text-sm font-medium text-gray-700">{action.label}</p>
-              <ChevronRight size={14} className="text-gray-300 group-hover:text-orange-400 transition-colors" />
-            </button>
-          ))}
         </div>
       </div>
     </div>
